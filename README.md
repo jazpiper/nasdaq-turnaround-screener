@@ -34,7 +34,7 @@ python -m screener.cli.main init-oracle-schema
 python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
 
-python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --total-windows 1 --max-credits-per-minute 7
+python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --total-windows 1 --max-credits-per-minute 5
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
 python scripts/run_daily.py --date 2026-04-21 --skip-install
 ```
@@ -70,4 +70,4 @@ docs/             current-state documentation
 
 ## Intraday Scheduling Note
 - `scripts/run_intraday_window.py` 는 slot 이름(`open-1` 등)을 스케줄 라벨로만 사용하고, 각 실행마다 NASDAQ-100 전체를 다시 수집합니다.
-- 기본 wrapper command는 Twelve Data free plan 대비 버퍼를 두기 위해 `max_credits_per_minute=7` 을 사용합니다.
+- 기본 wrapper command는 Twelve Data free plan 대비 버퍼를 더 두기 위해 `max_credits_per_minute=5` 를 사용합니다.

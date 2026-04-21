@@ -85,7 +85,7 @@ def test_build_collector_command_expands_placeholders() -> None:
     ]
 
 
-def test_default_collector_template_runs_full_universe_with_rate_limit_buffer() -> None:
+def test_default_collector_template_runs_full_universe_with_more_conservative_rate_limit() -> None:
     command = build_collector_command(
         command_template=DEFAULT_COLLECTOR_COMMAND_TEMPLATE,
         python_path=Path("/tmp/project/.venv/bin/python"),
@@ -109,7 +109,7 @@ def test_default_collector_template_runs_full_universe_with_rate_limit_buffer() 
         "--total-windows",
         "1",
         "--max-credits-per-minute",
-        "7",
+        "5",
         "--output-dir",
         "/tmp/project/output/intraday",
     ]
