@@ -125,9 +125,26 @@ def _score_reversal(snapshot: dict[str, Any], reasons: list[str], risks: list[st
     if lower_wick_ratio is not None and lower_wick_ratio >= 0.4:
         candle_bonus += 2
 
+    upper_wick_ratio = _as_float(snapshot, "upper_wick_ratio")
+    if upper_wick_ratio is not None and upper_wick_ratio >= 0.45:
+        risks.append("상단 꼬리가 길어 추격 매수 실패 가능성이 남아 있음")
+
+    real_body_pct = _as_float(snapshot, "real_body_pct")
+    if bool(snapshot.get("close_above_open", False)) and real_body_pct is not None and real_body_pct >= 0.35:
+        candle_bonus += 1
+        reasons.append("실체가 커 매수 우위가 비교적 분명함")
+
     if bool(snapshot.get("gap_down_reclaim", False)):
         candle_bonus += 3
         reasons.append("gap 하락 이후 회복 흐름이 확인됨")
+
+    if bool(snapshot.get("inside_day", False)) and bool(snapshot.get("close_above_open", False)):
+        candle_bonus += 1
+        reasons.append("inside day 안에서 매수 우위가 유지됨")
+
+    if bool(snapshot.get("bullish_engulfing_like", False)):
+        candle_bonus += 2
+        reasons.append("전일 몸통을 감싸는 bullish engulfing 유사 패턴")
 
     score = min(score + candle_bonus, 25)
     if close >= sma_5:

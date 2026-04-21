@@ -246,6 +246,17 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
         None if high == low else (min(open_price, close) - low) / (high - low)
         for open_price, high, low, close in zip(opens, highs, lows, closes)
     ]
+    upper_wick_ratio = [
+        None if high == low else (high - max(open_price, close)) / (high - low)
+        for open_price, high, low, close in zip(opens, highs, lows, closes)
+    ]
+    real_body_pct = [
+        None if high == low else abs(close - open_price) / (high - low)
+        for open_price, high, low, close in zip(opens, highs, lows, closes)
+    ]
+    previous_opens: list[float | None] = [None, *opens[:-1]]
+    previous_highs: list[float | None] = [None, *highs[:-1]]
+    previous_lows: list[float | None] = [None, *lows[:-1]]
     previous_closes: list[float | None] = [None, *closes[:-1]]
     gap_down_pct = [
         None if previous_close in (None, 0) else ((open_price / previous_close) - 1.0) * 100.0
@@ -254,6 +265,21 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
     gap_down_reclaim = [
         bool(gap_pct is not None and gap_pct < 0 and previous_close is not None and close >= previous_close)
         for gap_pct, previous_close, close in zip(gap_down_pct, previous_closes, closes)
+    ]
+    inside_day = [
+        bool(previous_high is not None and previous_low is not None and high <= previous_high and low >= previous_low)
+        for high, low, previous_high, previous_low in zip(highs, lows, previous_highs, previous_lows)
+    ]
+    bullish_engulfing_like = [
+        bool(
+            previous_open is not None
+            and previous_close is not None
+            and previous_close < previous_open
+            and close > open_price
+            and open_price <= previous_close
+            and close >= previous_open
+        )
+        for open_price, close, previous_open, previous_close in zip(opens, closes, previous_opens, previous_closes)
     ]
 
     enriched: list[dict[str, float | str | bool | None]] = []
@@ -281,8 +307,12 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
                 "close_above_open": close_above_open[index],
                 "close_location_value": close_location_value[index],
                 "lower_wick_ratio": lower_wick_ratio[index],
+                "upper_wick_ratio": upper_wick_ratio[index],
+                "real_body_pct": real_body_pct[index],
                 "gap_down_pct": gap_down_pct[index],
                 "gap_down_reclaim": gap_down_reclaim[index],
+                "inside_day": inside_day[index],
+                "bullish_engulfing_like": bullish_engulfing_like[index],
                 "rsi_14": rsi14[index],
                 "distance_to_20d_low": dist20[index],
                 "distance_to_60d_low": dist60[index],

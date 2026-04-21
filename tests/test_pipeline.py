@@ -150,8 +150,12 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert "close_above_open" in candidate.indicator_snapshot
     assert "close_location_value" in candidate.indicator_snapshot
     assert "lower_wick_ratio" in candidate.indicator_snapshot
+    assert "upper_wick_ratio" in candidate.indicator_snapshot
+    assert "real_body_pct" in candidate.indicator_snapshot
     assert "gap_down_pct" in candidate.indicator_snapshot
     assert "gap_down_reclaim" in candidate.indicator_snapshot
+    assert "inside_day" in candidate.indicator_snapshot
+    assert "bullish_engulfing_like" in candidate.indicator_snapshot
     assert "rel_strength_20d_vs_qqq" in candidate.indicator_snapshot
     assert "relative_strength_score" in candidate.indicator_snapshot
     assert "volume_ratio_20d" in candidate.indicator_snapshot
@@ -253,8 +257,12 @@ def test_indicator_engine_includes_candle_structure_metrics() -> None:
     assert isinstance(indicators["close_above_open"], bool)
     assert indicators["close_location_value"] is not None
     assert indicators["lower_wick_ratio"] is not None
+    assert indicators["upper_wick_ratio"] is not None
+    assert indicators["real_body_pct"] is not None
     assert indicators["gap_down_pct"] is not None
     assert isinstance(indicators["gap_down_reclaim"], bool)
+    assert isinstance(indicators["inside_day"], bool)
+    assert isinstance(indicators["bullish_engulfing_like"], bool)
 
 
 def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path: Path) -> None:

@@ -166,20 +166,32 @@
 - `close_above_open`
 - `close_location_value`
 - `lower_wick_ratio`
+- `upper_wick_ratio`
+- `real_body_pct`
 - `gap_down_pct`
 - `gap_down_reclaim`
+- `inside_day`
+- `bullish_engulfing_like`
 
 현재 구현 로직:
 - candle structure는 `reversal` bucket 안에 흡수합니다
 - `close_location_value >= 0.7` 이면 reversal 가산 + reason 추가
 - `lower_wick_ratio >= 0.4` 이면 reversal 가산
+- `close_above_open = true` 이고 `real_body_pct >= 0.35` 이면 reversal 소폭 가산
 - `gap_down_reclaim = true` 이면 reversal 가산 + reason 추가
+- `inside_day = true` 이고 양봉이면 reversal 소폭 가산
+- `bullish_engulfing_like = true` 이면 reversal 가산 + reason 추가
 - `close_location_value <= 0.35` 이면 risk 추가
+- `upper_wick_ratio >= 0.45` 이면 risk 추가
 
 대표 reason / risk:
 - `하단 꼬리 이후 종가가 일중 상단에서 마감`
+- `실체가 커 매수 우위가 비교적 분명함`
+- `inside day 안에서 매수 우위가 유지됨`
+- `전일 몸통을 감싸는 bullish engulfing 유사 패턴`
 - `gap 하락 이후 회복 흐름이 확인됨`
 - `종가가 일중 하단에 머물러 매수 우위 확인이 약함`
+- `상단 꼬리가 길어 추격 매수 실패 가능성이 남아 있음`
 
 ## 10. Extra Risk Note
 추가로 아래 조건이면 risk를 더 붙입니다.
@@ -194,7 +206,7 @@
 ## 12. Not Yet Implemented
 아래는 여전히 검토 아이디어이지만, 현재 scoring/filter 코드에는 직접 들어가 있지 않습니다.
 - sector relative strength
-- candle structure refinement (upper wick / engulfing / inside day)
+- candle structure refinement beyond current baseline (upper wick threshold tuning, stronger engulfing rules, inside day follow-through)
 - earnings API direct integration
 
 ## 13. Human Review Checklist

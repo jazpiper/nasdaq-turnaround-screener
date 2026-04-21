@@ -124,14 +124,21 @@ def test_score_candidate_applies_candle_reversal_bonus_and_reason() -> None:
             "close_above_open": True,
             "close_location_value": 0.85,
             "lower_wick_ratio": 0.45,
+            "upper_wick_ratio": 0.1,
+            "real_body_pct": 0.45,
             "gap_down_pct": -2.0,
             "gap_down_reclaim": True,
+            "inside_day": True,
+            "bullish_engulfing_like": True,
         }
     )
 
     assert "하단 꼬리 이후 종가가 일중 상단에서 마감" in candidate.reasons
     assert "gap 하락 이후 회복 흐름이 확인됨" in candidate.reasons
-    assert candidate.subscores["reversal"] >= 20
+    assert "실체가 커 매수 우위가 비교적 분명함" in candidate.reasons
+    assert "inside day 안에서 매수 우위가 유지됨" in candidate.reasons
+    assert "전일 몸통을 감싸는 bullish engulfing 유사 패턴" in candidate.reasons
+    assert candidate.subscores["reversal"] == 25
 
 
 def test_score_candidate_adds_candle_structure_risk_when_close_is_weak() -> None:
@@ -158,9 +165,14 @@ def test_score_candidate_adds_candle_structure_risk_when_close_is_weak() -> None
             "close_above_open": False,
             "close_location_value": 0.2,
             "lower_wick_ratio": 0.1,
+            "upper_wick_ratio": 0.5,
+            "real_body_pct": 0.12,
             "gap_down_pct": 0.5,
             "gap_down_reclaim": False,
+            "inside_day": False,
+            "bullish_engulfing_like": False,
         }
     )
 
     assert "종가가 일중 하단에 머물러 매수 우위 확인이 약함" in candidate.risks
+    assert "상단 꼬리가 길어 추격 매수 실패 가능성이 남아 있음" in candidate.risks
