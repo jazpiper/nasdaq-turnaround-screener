@@ -47,7 +47,7 @@ nasdaq-turnaround-screener/
 - `docs/architecture.md`: 시스템 구조와 데이터 흐름
 - `docs/storage.md`: Oracle SQL 중심 저장 전략과 future storage notes
 - `docs/operations.md`: OpenClaw 연동 및 운영 runbook
-- `docs/signals.md`: screening rules 초안
+- `docs/signals.md`: 현재 screening rules와 scoring 기준
 - `docs/roadmap.md`: 단계별 구현 계획
 
 ## Initial Scope
@@ -102,8 +102,9 @@ pytest
 - window 목록은 `SCREENER_INTRADAY_WINDOW_IDS`, output root는 `SCREENER_INTRADAY_OUTPUT_ROOT`, collector command는 `SCREENER_INTRADAY_COLLECTOR_COMMAND` 로 override 할 수 있습니다.
 
 ## Future Extensions
-- RSI, MACD, volume, gap, earnings proximity 반영
-- 섹터/시장 regime score 추가
+- MACD, gap, earnings proximity 같은 추가 factor 반영
+- 섹터/시장 regime score 확장
 - 백테스트와 score calibration
+- rejected candidate audit / universe-level feature snapshots
 - watchlist/history persistence
 - 웹 대시보드 또는 subscriber report 서비스화

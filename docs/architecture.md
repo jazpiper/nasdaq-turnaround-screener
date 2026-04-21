@@ -136,24 +136,29 @@ src/
   screener/
     cli/
       main.py
-    universe/
-      providers.py
+    collector.py
+    config.py
     data/
-      providers/
-      normalize.py
+      market_data.py
     indicators/
       technicals.py
-    scoring/
-      filters.py
-      ranking.py
+    intraday_artifacts.py
+    intraday_ops.py
+    models/
+      schemas.py
+    pipeline.py
     reporting/
       markdown.py
       json_report.py
+    scoring/
+      ranking.py
+    secrets.py
     storage/
       files.py
       oracle_sql.py
-    models/
-      schemas.py
+    universe/
+      loader.py
+      nasdaq100.py
 ```
 
 ## 5. OpenClaw Integration

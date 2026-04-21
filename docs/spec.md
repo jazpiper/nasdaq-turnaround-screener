@@ -36,15 +36,15 @@
 - gap / wick pattern summary
 - sector relative strength
 
-## 3. Core Filter Draft
+## 3. Core Filter Baseline
 후보 선별 기본 조건:
-- `close <= lower_bb * 1.02` 또는 intraday lower band touch
+- `close <= bb_lower * 1.02` 또는 `low <= bb_lower`
 - 최근 20일 저점 근처
 - 최소 데이터 길이 충족(예: 60 trading days 이상)
 - 데이터 결손 / 비정상 값 없음
 - 최소 유동성 기준 충족
 
-## 4. Candidate Score Draft
+## 4. Candidate Score Baseline
 총 100점 예시:
 - BB lower proximity: 25
 - recent low / capitulation context: 20

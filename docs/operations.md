@@ -28,13 +28,13 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --ski
 runner 동작:
 - `.venv` 가 없으면 생성합니다.
 - 필요하면 `pip install -e '.[dev]'` 로 로컬 환경을 맞춥니다.
-- `SCREENER_INTRADAY_COLLECTOR_COMMAND` 또는 `--collector-command` 템플릿에 `date`, `window_id`, `output_dir`, `python`, `project_root` 를 주입합니다.
+- `SCREENER_INTRADAY_COLLECTOR_COMMAND` 또는 `--collector-command` 템플릿에 `date`, `window_id`, `window_index`, `output_dir`, `output_root`, `python`, `project_root` 를 주입합니다.
 - 기본 output은 `output/intraday/YYYY-MM-DD/<window-id>/` 입니다.
-- collector 구현은 다른 branch/module이 담당하고, 이 runner는 cron에서 한 window를 안정적으로 호출하는 thin wrapper만 제공합니다.
+- 기본 collector command는 현재 구현된 `python -m screener.cli.main collect-window ...` 를 호출하고, 필요하면 다른 command template로 override 할 수 있습니다.
 
 예시:
 ```bash
-export SCREENER_INTRADAY_COLLECTOR_COMMAND='{python} -m screener.cli.collect_intraday --date {date} --window-id {window_id} --output-dir {output_dir}'
+export SCREENER_INTRADAY_COLLECTOR_COMMAND='{python} -m screener.cli.main collect-window --date {date} --window-index {window_index} --output-dir {output_root}'
 python scripts/run_intraday_window.py --window-id midday-1 --skip-install
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id power-hour-2 --collector-command '{python} -m custom.collector --date {date} --window {window_id} --out {output_dir}'
 ```
