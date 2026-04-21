@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -7,11 +8,11 @@ from pydantic import BaseModel, Field
 
 
 class ScoreBreakdown(BaseModel):
-    oversold: float = 0.0
-    bottom_context: float = 0.0
-    reversal: float = 0.0
-    volume: float = 0.0
-    market_context: float = 0.0
+    oversold: int = 0
+    bottom_context: int = 0
+    reversal: int = 0
+    volume: int = 0
+    market_context: int = 0
 
 
 class TickerInput(BaseModel):
@@ -22,7 +23,7 @@ class TickerInput(BaseModel):
 
 class CandidateResult(BaseModel):
     ticker: str
-    score: float
+    score: int
     subscores: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     close: float | None = None
     lower_bb: float | None = None
@@ -55,16 +56,18 @@ class ScreenRunResult(BaseModel):
         return len(self.candidates)
 
 
-class PipelineContext(BaseModel):
+@dataclass(slots=True)
+class PipelineContext:
     run_date: date
     generated_at: datetime
-    dry_run: bool = False
     universe_name: str = "NASDAQ-100"
     output_dir: Path = Path("output")
+    dry_run: bool = False
     run_mode: str = "daily"
 
 
-class RunArtifacts(BaseModel):
+@dataclass(slots=True)
+class RunArtifacts:
     markdown_path: Path | None = None
     json_report_path: Path | None = None
     metadata_path: Path | None = None

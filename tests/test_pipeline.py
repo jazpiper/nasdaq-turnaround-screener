@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from screener.config import Settings
 from screener.data.earnings import EarningsInfo
@@ -14,8 +15,12 @@ from screener.pipeline import (
     StaticUniverseProvider,
     TechnicalIndicatorEngine,
     YFinanceMarketDataProvider,
+    _close_improvement_streak,
+    _percent_return,
     build_context,
     build_market_data_provider,
+    merge_benchmark_context,
+    merge_earnings_context,
 )
 
 
@@ -279,3 +284,46 @@ def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path:
     result, _ = pipeline.run(build_context(run_date=date(2026, 4, 21), dry_run=True, output_dir=tmp_path))
 
     assert result.candidate_count == 0
+
+
+def test_build_context_normalizes_generated_at_to_new_york_timezone() -> None:
+    context = build_context(
+        run_date=date(2026, 4, 21),
+        generated_at=datetime(2026, 4, 21, 7, 30, tzinfo=timezone.utc),
+        dry_run=True,
+    )
+
+    assert context.generated_at.isoformat().endswith("-04:00")
+
+
+def test_merge_benchmark_context_adds_relative_strength_values() -> None:
+    merged = merge_benchmark_context(
+        {
+            "stock_return_20d": 6.0,
+            "stock_return_60d": 12.0,
+        },
+        {
+            "qqq_return_20d": 2.5,
+            "qqq_return_60d": 9.0,
+        },
+    )
+
+    assert merged["rel_strength_20d_vs_qqq"] == 3.5
+    assert merged["rel_strength_60d_vs_qqq"] == 3.0
+
+
+def test_merge_earnings_context_marks_missing_data() -> None:
+    merged = merge_earnings_context({"close": 100.0}, None)
+
+    assert merged["earnings_data_available"] is False
+
+
+def test_close_improvement_streak_counts_recent_up_days() -> None:
+    assert _close_improvement_streak([100.0, 101.0, 102.0, 101.0]) == 0
+    assert _close_improvement_streak([100.0, 99.0, 100.5, 101.0]) == 2
+
+
+def test_percent_return_handles_zero_or_missing_history() -> None:
+    assert _percent_return([100.0, 110.0], 5) is None
+    assert _percent_return([0.0, 1.0, 2.0], 2) is None
+    assert _percent_return([100.0, 105.0, 110.0], 2) == pytest.approx(10.0)

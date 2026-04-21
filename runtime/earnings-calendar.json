@@ -1,0 +1,7 @@
+{
+  "AAPL": {"next_earnings_date": "2026-04-24", "last_earnings_date": "2026-01-30"},
+  "MSFT": {"next_earnings_date": "2026-04-28", "last_earnings_date": "2026-01-27"},
+  "MDLZ": {"next_earnings_date": "2026-04-23", "last_earnings_date": "2026-01-29"},
+  "AMZN": {"next_earnings_date": "2026-04-25", "last_earnings_date": "2026-02-06"},
+  "META": {"next_earnings_date": "2026-04-29", "last_earnings_date": "2026-01-31"}
+}

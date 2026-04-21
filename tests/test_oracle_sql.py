@@ -56,7 +56,7 @@ def make_screen_result(tmp_path: Path) -> ScreenRunResult:
         candidates=[
             CandidateResult(
                 ticker="AAPL",
-                score=78.0,
+                score=78,
                 subscores=ScoreBreakdown(oversold=20, bottom_context=17, reversal=23, volume=10, market_context=8),
                 close=172.4,
                 lower_bb=171.9,
@@ -150,15 +150,26 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     connection = FakeConnection()
     storage = OracleSqlStorage(connector=lambda: connection)
 
+    storage.initialize_schema()
+
+    assert connection.committed is True
+    assert any("CREATE TABLE screen_runs" in statement for statement, _ in connection.statements)
+    assert any("ALTER TABLE screen_candidates ADD ( indicator_snapshot_json CLOB )" in statement for statement, _ in connection.statements)
+
+
+def test_persist_daily_run_inserts_without_schema_ddl(tmp_path: Path) -> None:
+    connection = FakeConnection()
+    storage = OracleSqlStorage(connector=lambda: connection)
+
     run_id = storage.persist_daily_run(make_screen_result(tmp_path))
 
     assert run_id.startswith("run_")
     assert connection.committed is True
     assert connection.rolled_back is False
     assert connection.closed is True
-    assert any("CREATE TABLE screen_runs" in statement for statement, _ in connection.statements)
     assert any("INSERT INTO screen_runs" in statement for statement, _ in connection.statements)
-    assert any("ALTER TABLE screen_candidates ADD ( indicator_snapshot_json CLOB )" in statement for statement, _ in connection.statements)
+    assert not any("CREATE TABLE" in statement for statement, _ in connection.statements)
+    assert not any("ALTER TABLE" in statement for statement, _ in connection.statements)
     candidate_insert = next(parameters for statement, parameters in connection.statements if "INSERT INTO screen_candidates" in statement)
     assert candidate_insert is not None
     assert "volume_ratio_20d" in candidate_insert["indicator_snapshot_json"]
@@ -169,7 +180,7 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     assert any("INSERT INTO candidate_subscores" in statement for statement, _ in connection.statements)
 
 
-def test_persist_intraday_collection_executes_schema_and_inserts(tmp_path: Path) -> None:
+def test_persist_intraday_collection_inserts_without_schema_ddl(tmp_path: Path) -> None:
     connection = FakeConnection()
     storage = OracleSqlStorage(connector=lambda: connection)
 
@@ -179,6 +190,6 @@ def test_persist_intraday_collection_executes_schema_and_inserts(tmp_path: Path)
     assert connection.committed is True
     assert connection.rolled_back is False
     assert connection.closed is True
-    assert any("CREATE TABLE intraday_collection_runs" in statement for statement, _ in connection.statements)
     assert any("INSERT INTO intraday_collection_runs" in statement for statement, _ in connection.statements)
     assert any("INSERT INTO intraday_collection_quotes" in statement for statement, _ in connection.statements)
+    assert not any("CREATE TABLE" in statement for statement, _ in connection.statements)

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from . import thresholds
+
 
 @dataclass(frozen=True)
 class ScreenCandidate:
@@ -58,13 +60,13 @@ def filter_candidates(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         if not is_valid_snapshot(row):
             continue
-        if not has_minimum_history(row):
+        if not has_minimum_history(row, minimum_bars=thresholds.MINIMUM_BARS):
             continue
-        if not passes_liquidity(row):
+        if not passes_liquidity(row, minimum_average_volume=thresholds.MINIMUM_AVERAGE_VOLUME):
             continue
-        if not near_lower_bollinger(row):
+        if not near_lower_bollinger(row, tolerance=thresholds.LOWER_BOLLINGER_TOLERANCE):
             continue
-        if not near_recent_low(row):
+        if not near_recent_low(row, max_distance_pct=thresholds.MAX_DISTANCE_TO_20D_LOW_PCT):
             continue
         if bool(row.get("weekly_trend_severe_damage", False)):
             continue
@@ -77,12 +79,12 @@ def _score_oversold(snapshot: dict[str, Any], reasons: list[str]) -> int:
     lower_bb = _as_float(snapshot, "bb_lower") or close
     rsi_14 = _as_float(snapshot, "rsi_14") or 50.0
     band_distance = 0.0 if lower_bb == 0 else abs(close - lower_bb) / abs(lower_bb)
-    proximity_score = _clip(1.0 - (band_distance / 0.03))
-    rsi_score = _clip((35.0 - rsi_14) / 15.0)
-    score = int(round((0.6 * proximity_score + 0.4 * rsi_score) * 25))
-    if close <= lower_bb * 1.02:
+    proximity_score = _clip(1.0 - (band_distance / thresholds.OVERSOLD_BB_DISTANCE_SCALE))
+    rsi_score = _clip((thresholds.OVERSOLD_RSI_TRIGGER - rsi_14) / thresholds.OVERSOLD_RSI_RANGE)
+    score = int(round((0.6 * proximity_score + 0.4 * rsi_score) * thresholds.OVERSOLD_MAX_SCORE))
+    if close <= lower_bb * thresholds.LOWER_BOLLINGER_TOLERANCE:
         reasons.append("BB 하단 근처 또는 재진입 구간")
-    if rsi_14 <= 35:
+    if rsi_14 <= thresholds.OVERSOLD_RSI_TRIGGER:
         reasons.append("RSI 14가 과매도권 또는 초기 탈출 구간")
     return score
 
@@ -90,9 +92,9 @@ def _score_oversold(snapshot: dict[str, Any], reasons: list[str]) -> int:
 def _score_bottom_context(snapshot: dict[str, Any], reasons: list[str]) -> int:
     distance_20 = _as_float(snapshot, "distance_to_20d_low") or 100.0
     distance_60 = _as_float(snapshot, "distance_to_60d_low") or 100.0
-    score_20 = _clip(1.0 - (distance_20 / 8.0))
-    score_60 = _clip(1.0 - (distance_60 / 15.0))
-    score = int(round((0.6 * score_20 + 0.4 * score_60) * 20))
+    score_20 = _clip(1.0 - (distance_20 / thresholds.BOTTOM_DISTANCE_20D_SCALE))
+    score_60 = _clip(1.0 - (distance_60 / thresholds.BOTTOM_DISTANCE_60D_SCALE))
+    score = int(round((0.6 * score_20 + 0.4 * score_60) * thresholds.BOTTOM_CONTEXT_MAX_SCORE))
     if distance_20 <= 3.0:
         reasons.append("최근 20일 저점 부근")
     if distance_60 <= 8.0:
@@ -105,32 +107,36 @@ def _score_reversal(snapshot: dict[str, Any], reasons: list[str], risks: list[st
     sma_5 = _as_float(snapshot, "sma_5") or close
     close_streak = float(snapshot.get("close_improvement_streak", 0))
     rsi_slope = float(snapshot.get("rsi_3d_change", 0.0))
-    below_sma_penalty = 0.0 if close >= sma_5 else 0.35
-    streak_score = _clip(close_streak / 3.0)
+    below_sma_penalty = 0.0 if close >= sma_5 else thresholds.REVERSAL_BELOW_SMA_PENALTY
+    streak_score = _clip(close_streak / thresholds.REVERSAL_CLOSE_STREAK_TARGET)
     sma_score = 1.0 - below_sma_penalty
-    rsi_score = _clip((rsi_slope + 6.0) / 12.0)
+    rsi_score = _clip((rsi_slope - thresholds.REVERSAL_RSI_CHANGE_FLOOR) / thresholds.REVERSAL_RSI_CHANGE_RANGE)
     raw = 0.45 * sma_score + 0.35 * streak_score + 0.20 * rsi_score
-    score = int(round(_clip(raw) * 25))
+    score = int(round(_clip(raw) * thresholds.REVERSAL_MAX_SCORE))
     candle_bonus = 0
 
     close_location_value = _as_float(snapshot, "close_location_value")
     if close_location_value is not None:
-        if close_location_value >= 0.7:
+        if close_location_value >= thresholds.REVERSAL_CLOSE_LOCATION_STRONG:
             candle_bonus += 2
             reasons.append("하단 꼬리 이후 종가가 일중 상단에서 마감")
-        elif close_location_value <= 0.35:
+        elif close_location_value <= thresholds.REVERSAL_CLOSE_LOCATION_WEAK:
             risks.append("종가가 일중 하단에 머물러 매수 우위 확인이 약함")
 
     lower_wick_ratio = _as_float(snapshot, "lower_wick_ratio")
-    if lower_wick_ratio is not None and lower_wick_ratio >= 0.4:
+    if lower_wick_ratio is not None and lower_wick_ratio >= thresholds.REVERSAL_LOWER_WICK_STRONG:
         candle_bonus += 2
 
     upper_wick_ratio = _as_float(snapshot, "upper_wick_ratio")
-    if upper_wick_ratio is not None and upper_wick_ratio >= 0.45:
+    if upper_wick_ratio is not None and upper_wick_ratio >= thresholds.REVERSAL_UPPER_WICK_RISK:
         risks.append("상단 꼬리가 길어 추격 매수 실패 가능성이 남아 있음")
 
     real_body_pct = _as_float(snapshot, "real_body_pct")
-    if bool(snapshot.get("close_above_open", False)) and real_body_pct is not None and real_body_pct >= 0.35:
+    if (
+        bool(snapshot.get("close_above_open", False))
+        and real_body_pct is not None
+        and real_body_pct >= thresholds.REVERSAL_REAL_BODY_STRONG
+    ):
         candle_bonus += 1
         reasons.append("실체가 커 매수 우위가 비교적 분명함")
 
@@ -146,7 +152,7 @@ def _score_reversal(snapshot: dict[str, Any], reasons: list[str], risks: list[st
         candle_bonus += 2
         reasons.append("전일 몸통을 감싸는 bullish engulfing 유사 패턴")
 
-    score = min(score + candle_bonus, 25)
+    score = min(score + candle_bonus, thresholds.REVERSAL_MAX_SCORE)
     if close >= sma_5:
         reasons.append("5일선 회복 또는 회복 시도")
     else:
@@ -158,10 +164,15 @@ def _score_reversal(snapshot: dict[str, Any], reasons: list[str], risks: list[st
 
 def _score_volume(snapshot: dict[str, Any], reasons: list[str], risks: list[str]) -> int:
     ratio = _as_float(snapshot, "volume_ratio_20d") or 0.0
-    score = int(round(_clip((ratio - 0.8) / 0.8) * 15))
-    if 0.8 <= ratio <= 1.4:
+    score = int(
+        round(
+            _clip((ratio - thresholds.VOLUME_BASELINE_RATIO) / thresholds.VOLUME_BASELINE_RATIO)
+            * thresholds.VOLUME_MAX_SCORE
+        )
+    )
+    if thresholds.VOLUME_BASELINE_RATIO <= ratio <= thresholds.VOLUME_HOT_RATIO:
         reasons.append("거래량이 20일 평균 대비 과열되지 않음")
-    elif ratio > 1.4:
+    elif ratio > thresholds.VOLUME_HOT_RATIO:
         reasons.append("반등 시도에 거래량 유입이 동반됨")
     else:
         risks.append("거래량이 평균 대비 약해 신호 신뢰도가 낮을 수 있음")
@@ -169,35 +180,35 @@ def _score_volume(snapshot: dict[str, Any], reasons: list[str], risks: list[str]
 
 
 def _score_market_context(snapshot: dict[str, Any], reasons: list[str], risks: list[str]) -> int:
-    market_context = float(snapshot.get("market_context_score", 10.0))
+    market_context = float(snapshot.get("market_context_score", thresholds.MARKET_CONTEXT_BASELINE))
     relative_strength_bonus = 0.0
 
     rel_strength_20d = _as_float(snapshot, "rel_strength_20d_vs_qqq")
     if rel_strength_20d is not None:
-        if rel_strength_20d >= 5.0:
+        if rel_strength_20d >= thresholds.RELATIVE_STRENGTH_20D_STRONG:
             relative_strength_bonus += 3.0
             reasons.append("최근 20일 기준 QQQ 대비 상대적으로 덜 약함")
-        elif rel_strength_20d >= 2.0:
+        elif rel_strength_20d >= thresholds.RELATIVE_STRENGTH_20D_POSITIVE:
             relative_strength_bonus += 1.5
             reasons.append("시장 대비 상대강도가 개선되는 구간")
-        elif rel_strength_20d <= -5.0:
+        elif rel_strength_20d <= thresholds.RELATIVE_STRENGTH_20D_WEAK:
             relative_strength_bonus -= 3.0
             risks.append("최근 20일 기준 시장 대비 상대약세가 큼")
 
     rel_strength_60d = _as_float(snapshot, "rel_strength_60d_vs_qqq")
     if rel_strength_60d is not None:
-        if rel_strength_60d >= 4.0:
+        if rel_strength_60d >= thresholds.RELATIVE_STRENGTH_60D_STRONG:
             relative_strength_bonus += 1.5
-        elif rel_strength_60d <= -8.0:
+        elif rel_strength_60d <= thresholds.RELATIVE_STRENGTH_60D_WEAK:
             relative_strength_bonus -= 2.0
             risks.append("장세 반등 대비 추종력이 약할 수 있음")
 
     adjusted_context = market_context + relative_strength_bonus
-    score = int(round(_clip(adjusted_context / 15.0) * 15))
+    score = int(round(_clip(adjusted_context / thresholds.MARKET_CONTEXT_SCALE) * thresholds.MARKET_CONTEXT_MAX_SCORE))
     snapshot["relative_strength_score"] = score
-    if float(snapshot.get("weekly_trend_penalty", 0.0)) >= 3.0:
+    if float(snapshot.get("weekly_trend_penalty", 0.0)) >= thresholds.WEEKLY_TREND_RISK_PENALTY:
         risks.append("주봉 추세가 아직 약해 강한 반전 확인이 더 필요함")
-    if score <= 6:
+    if score <= thresholds.MARKET_CONTEXT_LOW_SCORE:
         risks.append("시장/섹터 맥락 확인이 필요함")
     return score
 
@@ -207,16 +218,16 @@ def _apply_earnings_penalty(snapshot: dict[str, Any], risks: list[str]) -> int:
     days_to_next = snapshot.get("days_to_next_earnings")
     if days_to_next is not None:
         days_to_next = int(days_to_next)
-        if days_to_next <= 2:
-            penalty = max(penalty, 8)
+        if days_to_next <= thresholds.EARNINGS_IMMINENT_DAYS:
+            penalty = max(penalty, thresholds.EARNINGS_IMMINENT_PENALTY)
             risks.append("실적 발표가 임박해 이벤트 리스크가 큼")
-        elif days_to_next <= 5:
-            penalty = max(penalty, 4)
+        elif days_to_next <= thresholds.EARNINGS_NEAR_TERM_DAYS:
+            penalty = max(penalty, thresholds.EARNINGS_NEAR_TERM_PENALTY)
             risks.append("실적 발표가 가까워 변동성 리스크가 있음")
 
     days_since_last = snapshot.get("days_since_last_earnings")
-    if days_since_last is not None and int(days_since_last) <= 2:
-        penalty = max(penalty, 3)
+    if days_since_last is not None and int(days_since_last) <= thresholds.RECENT_EARNINGS_DAYS:
+        penalty = max(penalty, thresholds.RECENT_EARNINGS_PENALTY)
         risks.append("실적 발표 직후 변동성 구간일 수 있음")
 
     return penalty
@@ -228,26 +239,26 @@ def _apply_volatility_penalty(snapshot: dict[str, Any], reasons: list[str], risk
 
     atr_14_pct = _as_float(snapshot, "atr_14_pct")
     if atr_14_pct is not None:
-        if atr_14_pct >= 6.0:
-            penalty = max(penalty, 4)
+        if atr_14_pct >= thresholds.VOLATILITY_ATR_PENALTY_THRESHOLD:
+            penalty = max(penalty, thresholds.VOLATILITY_ATR_PENALTY)
             risks.append("변동성이 아직 높아 바닥 확인이 이를 수 있음")
-        elif atr_14_pct <= 3.5:
+        elif atr_14_pct <= thresholds.VOLATILITY_ATR_CALM_THRESHOLD:
             calm_signals += 1
 
     daily_range_pct = _as_float(snapshot, "daily_range_pct")
     if daily_range_pct is not None:
-        if daily_range_pct >= 7.0:
-            penalty = max(penalty, 2)
+        if daily_range_pct >= thresholds.VOLATILITY_RANGE_PENALTY_THRESHOLD:
+            penalty = max(penalty, thresholds.VOLATILITY_RANGE_PENALTY)
             risks.append("일중 range가 커서 신호 품질이 불안정함")
-        elif daily_range_pct <= 4.5:
+        elif daily_range_pct <= thresholds.VOLATILITY_RANGE_CALM_THRESHOLD:
             calm_signals += 1
 
     bb_width_pct = _as_float(snapshot, "bb_width_pct")
     if bb_width_pct is not None:
-        if bb_width_pct >= 25.0:
-            penalty = max(penalty, 3)
+        if bb_width_pct >= thresholds.VOLATILITY_BB_WIDTH_PENALTY_THRESHOLD:
+            penalty = max(penalty, thresholds.VOLATILITY_BB_WIDTH_PENALTY)
             risks.append("볼린저 밴드 폭이 넓어 아직 구조가 불안정함")
-        elif bb_width_pct <= 18.0:
+        elif bb_width_pct <= thresholds.VOLATILITY_BB_WIDTH_CALM_THRESHOLD:
             calm_signals += 1
 
     if penalty == 0 and calm_signals == 3:

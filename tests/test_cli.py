@@ -6,6 +6,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from screener.backtest import BacktestArtifacts
 from screener.cli.main import app
 from screener.models import CandidateResult, RunArtifacts, RunMetadata, ScreenRunResult, ScoreBreakdown
 
@@ -31,7 +32,7 @@ class StubPipeline:
             candidates=[
                 CandidateResult(
                     ticker="AAPL",
-                    score=78.0,
+                    score=78,
                     subscores=ScoreBreakdown(oversold=20, bottom_context=17, reversal=23, volume=10, market_context=8),
                     close=172.4,
                     lower_bb=171.9,
@@ -84,6 +85,31 @@ class StubOracleSqlStorage:
 
     def persist_intraday_collection(self, result):
         return "intraday_test"
+
+    def initialize_schema(self):
+        return None
+
+
+class StubBacktestRunner:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def run(self, *, start_date, end_date, output_dir, forward_horizons, dry_run):
+        summary = {
+            "trading_day_count": 3,
+            "candidate_observation_count": 2,
+        }
+        artifacts = BacktestArtifacts(
+            summary_path=output_dir / "backtest-summary.json",
+            observations_path=output_dir / "backtest-observations.csv",
+        )
+        if not dry_run:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            artifacts.summary_path.write_text(json.dumps(summary), encoding="utf-8")
+            artifacts.observations_path.write_text("run_date,ticker,score\n2026-04-20,AAPL,78\n", encoding="utf-8")
+        else:
+            artifacts = BacktestArtifacts()
+        return summary, artifacts
 
 
 class StubCollector:
@@ -161,6 +187,15 @@ def test_run_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:
     assert "Oracle SQL run id: run_test" in result.stdout
 
 
+def test_init_oracle_schema_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.OracleSqlStorage.from_settings", lambda settings: StubOracleSqlStorage())
+
+    result = runner.invoke(app, ["init-oracle-schema"])
+
+    assert result.exit_code == 0
+    assert "Oracle SQL schema initialized." in result.stdout
+
+
 
 def test_collect_window_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", StubCollector)
@@ -196,6 +231,31 @@ def test_collect_window_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -
 
     assert result.exit_code == 0
     assert "Oracle SQL collection id: intraday_test" in result.stdout
+
+
+def test_backtest_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.HistoricalBacktestRunner", StubBacktestRunner)
+
+    result = runner.invoke(
+        app,
+        [
+            "backtest",
+            "--start-date",
+            "2026-04-01",
+            "--end-date",
+            "2026-04-21",
+            "--output-dir",
+            str(tmp_path),
+            "--horizons",
+            "5,10",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Trading days: 3" in result.stdout
+    assert "Candidate observations: 2" in result.stdout
+    assert (tmp_path / "backtest-summary.json").exists()
+    assert (tmp_path / "backtest-observations.csv").exists()
 
 
 

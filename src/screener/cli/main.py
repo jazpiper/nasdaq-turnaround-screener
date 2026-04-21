@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 
+from screener.backtest import HistoricalBacktestRunner
 from screener.collector import CollectionResult, TwelveDataWindowCollector
 from screener.config import Settings, get_settings
 from screener.models import ScreenRunResult
@@ -24,6 +25,24 @@ def parse_run_date(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:  # pragma: no cover, handled by typer
         raise typer.BadParameter("Date must be in YYYY-MM-DD format.") from exc
+
+
+def parse_horizons(value: str) -> tuple[int, ...]:
+    horizons: list[int] = []
+    for part in value.split(","):
+        normalized = part.strip()
+        if not normalized:
+            continue
+        try:
+            horizon = int(normalized)
+        except ValueError as exc:
+            raise typer.BadParameter("Horizons must be a comma-separated list of integers.") from exc
+        if horizon <= 0:
+            raise typer.BadParameter("Horizons must be positive integers.")
+        horizons.append(horizon)
+    if not horizons:
+        raise typer.BadParameter("At least one horizon is required.")
+    return tuple(dict.fromkeys(horizons))
 
 
 @app.command()
@@ -102,6 +121,58 @@ def collect_window(
     typer.echo(f"Quotes report: {result.artifacts.quotes_path}")
     if collection_run_id is not None:
         typer.echo(f"Oracle SQL collection id: {collection_run_id}")
+
+
+@app.command("init-oracle-schema")
+def init_oracle_schema() -> None:
+    settings = get_settings()
+    settings.oracle_sql_enabled = True
+    try:
+        storage = OracleSqlStorage.from_settings(settings)
+    except OracleSqlStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    if storage is None:
+        typer.echo("Oracle SQL persistence is disabled.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        storage.initialize_schema()
+    except OracleSqlStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo("Oracle SQL schema initialized.")
+
+
+@app.command()
+def backtest(
+    start_date: str = typer.Option(..., "--start-date", help="Inclusive start date in YYYY-MM-DD format."),
+    end_date: str = typer.Option(..., "--end-date", help="Inclusive end date in YYYY-MM-DD format."),
+    output_dir: Path = typer.Option(Path("output/backtests"), help="Directory for backtest artifacts."),
+    horizons: str = typer.Option("5,10,20", help="Comma-separated forward return horizons in trading days."),
+    dry_run: bool = typer.Option(False, help="Run the backtest without writing artifacts."),
+) -> None:
+    settings = get_settings(output_dir=output_dir)
+    parsed_horizons = parse_horizons(horizons)
+    summary, artifacts = HistoricalBacktestRunner(settings=settings).run(
+        start_date=parse_run_date(start_date),
+        end_date=parse_run_date(end_date),
+        output_dir=settings.output_dir,
+        forward_horizons=parsed_horizons,
+        dry_run=dry_run,
+    )
+
+    typer.echo(f"Trading days: {summary['trading_day_count']}")
+    typer.echo(f"Candidate observations: {summary['candidate_observation_count']}")
+    typer.echo(f"Horizons: {', '.join(str(horizon) for horizon in parsed_horizons)}")
+    if dry_run:
+        typer.echo("Artifacts skipped (--dry-run).")
+        return
+
+    typer.echo(f"Summary report: {artifacts.summary_path}")
+    typer.echo(f"Observation CSV: {artifacts.observations_path}")
 
 
 def _persist_daily_run_if_enabled(settings: Settings, result: ScreenRunResult) -> str | None:

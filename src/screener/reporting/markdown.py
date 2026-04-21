@@ -34,7 +34,7 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         lines.extend(
             [
                 f"### {candidate.ticker}",
-                f"- score: {candidate.score:.2f}",
+                f"- score: {candidate.score}",
                 f"- reasons: {', '.join(candidate.reasons) if candidate.reasons else 'n/a'}",
                 f"- risks: {', '.join(candidate.risks) if candidate.risks else 'n/a'}",
                 "",
