@@ -49,6 +49,7 @@ nasdaq-turnaround-screener/
 - `docs/operations.md`: OpenClaw 연동 및 운영 runbook
 - `docs/signals.md`: 현재 screening rules와 scoring 기준
 - `docs/roadmap.md`: 단계별 구현 계획
+- `docs/factor-expansion-design.md`: 1차/2차/3차 factor 확장 설계
 
 ## Initial Scope
 1. NASDAQ-100 universe 수집
