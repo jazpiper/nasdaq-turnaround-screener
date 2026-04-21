@@ -33,6 +33,23 @@ class StubFetcher:
         )
 
 
+class QuotaExceededFetcher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def fetch(self, tickers: list[str]) -> FetchResult:
+        ticker = tickers[0]
+        self.calls.append(ticker)
+        if ticker == "AAPL":
+            return FetchResult(
+                bars_by_ticker={},
+                failed_tickers={
+                    ticker: "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800."
+                },
+            )
+        raise AssertionError("collector should stop after daily credit exhaustion")
+
+
 def build_settings(tmp_path: Path) -> Settings:
     settings = Settings(
         output_dir=tmp_path,
@@ -101,3 +118,32 @@ def test_run_window_writes_metadata_and_quotes(tmp_path: Path) -> None:
 
     quotes = json.loads(result.artifacts.quotes_path.read_text(encoding="utf-8"))
     assert [quote["ticker"] for quote in quotes["quotes"]] == ["AAPL", "ADBE"]
+
+
+def test_run_window_stops_early_when_daily_twelve_data_credits_are_exhausted(tmp_path: Path) -> None:
+    sleep_calls: list[float] = []
+    fetcher = QuotaExceededFetcher()
+    collector = TwelveDataWindowCollector(
+        settings=build_settings(tmp_path),
+        fetcher=fetcher,
+        sleeper=sleep_calls.append,
+        clock=lambda: datetime(2026, 4, 21, 8, 0, tzinfo=timezone.utc),
+        universe=["AAPL", "ABNB", "ADBE"],
+    )
+
+    result = collector.run_window(
+        run_date=date(2026, 4, 21),
+        output_root=tmp_path,
+        window_index=0,
+        total_windows=1,
+        max_credits_per_minute=2,
+    )
+
+    assert fetcher.calls == ["AAPL"]
+    assert sleep_calls == []
+    assert result.successes == []
+    assert result.failures == {
+        "AAPL": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800.",
+        "ABNB": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800.",
+        "ADBE": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800.",
+    }

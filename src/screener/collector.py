@@ -7,6 +7,11 @@ from pathlib import Path
 from time import sleep as _sleep
 from typing import Callable, Protocol
 
+DAILY_CREDIT_EXHAUSTED_MARKERS = (
+    "run out of api credits for the day",
+    "current limit being 800",
+)
+
 from screener.config import Settings
 from screener.data import DailyBar, TwelveDataDailyBarFetcher
 from screener.storage.files import ensure_directory, write_json
@@ -142,22 +147,35 @@ class TwelveDataWindowCollector:
         failures: dict[str, str] = {}
         pause_seconds = ceil(60 / max_credits_per_minute)
 
+        should_stop_early = False
         for batch_index, batch in enumerate(plan.minute_batches):
             for ticker_index, ticker in enumerate(batch):
                 result = self.fetcher.fetch([ticker])
                 bars_by_ticker = getattr(result, "bars_by_ticker", {})
                 failed_tickers = getattr(result, "failed_tickers", {})
                 if ticker in failed_tickers:
-                    failures[ticker] = str(failed_tickers[ticker])
+                    failure_message = str(failed_tickers[ticker])
+                    failures[ticker] = failure_message
+                    should_stop_early = _is_daily_credit_exhausted(failure_message)
                 else:
                     bars = bars_by_ticker.get(ticker) or []
                     if not bars:
                         failures[ticker] = "No price rows returned"
                     else:
                         collected.append(CollectedQuote.from_bar(bars[-1]))
+
+                if should_stop_early:
+                    for later_index, later_batch in enumerate(plan.minute_batches[batch_index:], start=batch_index):
+                        start_at = ticker_index + 1 if later_index == batch_index else 0
+                        for pending in later_batch[start_at:]:
+                            failures[pending] = failure_message
+                    break
+
                 is_last_request = batch_index == len(plan.minute_batches) - 1 and ticker_index == len(batch) - 1
                 if not is_last_request:
                     self.sleeper(pause_seconds)
+            if should_stop_early:
+                break
 
         completed_at = self.clock()
         successes = [quote.ticker for quote in collected]
@@ -251,3 +269,8 @@ def _split_evenly(items: list[str], parts: int) -> list[list[str]]:
 
 def _chunk(items: list[str], size: int) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _is_daily_credit_exhausted(message: str) -> bool:
+    normalized = message.strip().lower()
+    return any(marker in normalized for marker in DAILY_CREDIT_EXHAUSTED_MARKERS)
