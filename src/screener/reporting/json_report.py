@@ -11,5 +11,7 @@ def build_json_report(result: ScreenRunResult) -> dict:
         "run_mode": result.metadata.run_mode,
         "dry_run": result.metadata.dry_run,
         "candidate_count": result.candidate_count,
+        "data_failures": list(result.metadata.data_failures),
+        "notes": list(result.metadata.notes),
         "candidates": [candidate.model_dump(mode="json") for candidate in result.candidates],
     }

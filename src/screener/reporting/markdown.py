@@ -20,9 +20,14 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         lines.extend(f"- {note}" for note in metadata.notes)
         lines.append("")
 
+    if metadata.data_failures:
+        lines.append("## Data Failures")
+        lines.extend(f"- {failure}" for failure in metadata.data_failures)
+        lines.append("")
+
     lines.append("## Candidates")
     if not result.candidates:
-        lines.append("- No candidates generated in scaffold mode yet.")
+        lines.append("- No candidates matched the current screening rules.")
         return "\n".join(lines) + "\n"
 
     for candidate in result.candidates:

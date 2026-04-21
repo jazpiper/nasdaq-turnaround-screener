@@ -19,7 +19,7 @@ class Settings:
     twelve_data_base_url: str = "https://api.twelvedata.com/time_series"
     default_notes: list[str] = field(
         default_factory=lambda: [
-            "Scaffold run: concrete data providers and scoring logic are attached later.",
+            "Signals are generated from recent daily price history and technical ranking rules.",
         ]
     )
 
