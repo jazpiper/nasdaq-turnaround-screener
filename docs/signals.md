@@ -161,23 +161,43 @@
 - `일중 range가 커서 신호 품질이 불안정함`
 - `볼린저 밴드 폭이 넓어 아직 구조가 불안정함`
 
-## 9. Extra Risk Note
+## 9. Candle Structure / Reversal Bar Quality
+주요 입력:
+- `close_above_open`
+- `close_location_value`
+- `lower_wick_ratio`
+- `gap_down_pct`
+- `gap_down_reclaim`
+
+현재 구현 로직:
+- candle structure는 `reversal` bucket 안에 흡수합니다
+- `close_location_value >= 0.7` 이면 reversal 가산 + reason 추가
+- `lower_wick_ratio >= 0.4` 이면 reversal 가산
+- `gap_down_reclaim = true` 이면 reversal 가산 + reason 추가
+- `close_location_value <= 0.35` 이면 risk 추가
+
+대표 reason / risk:
+- `하단 꼬리 이후 종가가 일중 상단에서 마감`
+- `gap 하락 이후 회복 흐름이 확인됨`
+- `종가가 일중 하단에 머물러 매수 우위 확인이 약함`
+
+## 10. Extra Risk Note
 추가로 아래 조건이면 risk를 더 붙입니다.
 - `sma_20 < sma_60`
 
 대표 risk:
 - `중기 추세는 아직 하락 압력일 수 있음`
 
-## 10. Ranking Philosophy
+## 11. Ranking Philosophy
 가장 많이 빠진 종목이 아니라, `과매도 + 저점 형성 + 전환 신호` 조합이 좋은 종목을 우선합니다.
 
-## 11. Not Yet Implemented
+## 12. Not Yet Implemented
 아래는 여전히 검토 아이디어이지만, 현재 scoring/filter 코드에는 직접 들어가 있지 않습니다.
 - sector relative strength
-- long lower wick / candle pattern 정교화
+- candle structure refinement (upper wick / engulfing / inside day)
 - earnings API direct integration
 
-## 12. Human Review Checklist
+## 13. Human Review Checklist
 최종 후보 확인 시 아래를 같이 봅니다.
 - 실적 발표 일정
 - 섹터 뉴스

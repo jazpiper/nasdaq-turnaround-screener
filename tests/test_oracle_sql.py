@@ -70,6 +70,8 @@ def make_screen_result(tmp_path: Path) -> ScreenRunResult:
                     "sma_5": 173.1,
                     "atr_14_pct": 2.8,
                     "bb_width_pct": 11.5,
+                    "close_location_value": 0.82,
+                    "gap_down_reclaim": True,
                     "volatility_penalty": 0,
                     "volume_ratio_20d": 1.2,
                     "weekly_trend_penalty": 0.0,
@@ -158,6 +160,7 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     assert candidate_insert is not None
     assert "volume_ratio_20d" in candidate_insert["indicator_snapshot_json"]
     assert "volatility_penalty" in candidate_insert["indicator_snapshot_json"]
+    assert "gap_down_reclaim" in candidate_insert["indicator_snapshot_json"]
     assert candidate_insert["snapshot_schema_version"] == 2
     assert any("INSERT INTO candidate_subscores" in statement for statement, _ in connection.statements)
 

@@ -147,6 +147,11 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert "atr_14_pct" in candidate.indicator_snapshot
     assert "daily_range_pct" in candidate.indicator_snapshot
     assert "bb_width_pct" in candidate.indicator_snapshot
+    assert "close_above_open" in candidate.indicator_snapshot
+    assert "close_location_value" in candidate.indicator_snapshot
+    assert "lower_wick_ratio" in candidate.indicator_snapshot
+    assert "gap_down_pct" in candidate.indicator_snapshot
+    assert "gap_down_reclaim" in candidate.indicator_snapshot
     assert "rel_strength_20d_vs_qqq" in candidate.indicator_snapshot
     assert "relative_strength_score" in candidate.indicator_snapshot
     assert "volume_ratio_20d" in candidate.indicator_snapshot
@@ -235,6 +240,21 @@ def test_indicator_engine_includes_volatility_metrics() -> None:
     assert indicators["bb_width_pct"] is not None
     assert indicators["atr_14_pct"] > 0
     assert indicators["daily_range_pct"] > 0
+
+
+def test_indicator_engine_includes_candle_structure_metrics() -> None:
+    history = make_history(start_close=180.0, days=90)
+    indicators = TechnicalIndicatorEngine().compute(
+        history,
+        TickerInput(ticker="AAPL"),
+        build_context(run_date=date(2026, 4, 21), dry_run=True),
+    )
+
+    assert isinstance(indicators["close_above_open"], bool)
+    assert indicators["close_location_value"] is not None
+    assert indicators["lower_wick_ratio"] is not None
+    assert indicators["gap_down_pct"] is not None
+    assert isinstance(indicators["gap_down_reclaim"], bool)
 
 
 def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path: Path) -> None:

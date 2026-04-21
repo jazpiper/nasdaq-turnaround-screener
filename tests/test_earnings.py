@@ -98,3 +98,69 @@ def test_score_candidate_applies_volatility_penalty_and_risks() -> None:
     assert "일중 range가 커서 신호 품질이 불안정함" in candidate.risks
     assert "볼린저 밴드 폭이 넓어 아직 구조가 불안정함" in candidate.risks
     assert candidate.score == sum(candidate.subscores.values()) - 4
+
+
+def test_score_candidate_applies_candle_reversal_bonus_and_reason() -> None:
+    candidate = score_candidate(
+        {
+            "ticker": "AAPL",
+            "bars_available": 90,
+            "average_volume_20d": 2_000_000,
+            "close": 100.0,
+            "low": 95.0,
+            "bb_lower": 99.0,
+            "rsi_14": 30.0,
+            "distance_to_20d_low": 1.0,
+            "distance_to_60d_low": 4.0,
+            "sma_5": 99.5,
+            "sma_20": 101.0,
+            "sma_60": 100.0,
+            "volume_ratio_20d": 1.0,
+            "close_improvement_streak": 2,
+            "rsi_3d_change": 2.0,
+            "market_context_score": 10.0,
+            "weekly_trend_penalty": 0.0,
+            "weekly_trend_severe_damage": False,
+            "close_above_open": True,
+            "close_location_value": 0.85,
+            "lower_wick_ratio": 0.45,
+            "gap_down_pct": -2.0,
+            "gap_down_reclaim": True,
+        }
+    )
+
+    assert "하단 꼬리 이후 종가가 일중 상단에서 마감" in candidate.reasons
+    assert "gap 하락 이후 회복 흐름이 확인됨" in candidate.reasons
+    assert candidate.subscores["reversal"] >= 20
+
+
+def test_score_candidate_adds_candle_structure_risk_when_close_is_weak() -> None:
+    candidate = score_candidate(
+        {
+            "ticker": "AAPL",
+            "bars_available": 90,
+            "average_volume_20d": 2_000_000,
+            "close": 100.0,
+            "low": 95.0,
+            "bb_lower": 99.0,
+            "rsi_14": 30.0,
+            "distance_to_20d_low": 1.0,
+            "distance_to_60d_low": 4.0,
+            "sma_5": 101.0,
+            "sma_20": 101.0,
+            "sma_60": 100.0,
+            "volume_ratio_20d": 1.0,
+            "close_improvement_streak": 0,
+            "rsi_3d_change": -1.0,
+            "market_context_score": 10.0,
+            "weekly_trend_penalty": 0.0,
+            "weekly_trend_severe_damage": False,
+            "close_above_open": False,
+            "close_location_value": 0.2,
+            "lower_wick_ratio": 0.1,
+            "gap_down_pct": 0.5,
+            "gap_down_reclaim": False,
+        }
+    )
+
+    assert "종가가 일중 하단에 머물러 매수 우위 확인이 약함" in candidate.risks

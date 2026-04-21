@@ -111,6 +111,25 @@ def _score_reversal(snapshot: dict[str, Any], reasons: list[str], risks: list[st
     rsi_score = _clip((rsi_slope + 6.0) / 12.0)
     raw = 0.45 * sma_score + 0.35 * streak_score + 0.20 * rsi_score
     score = int(round(_clip(raw) * 25))
+    candle_bonus = 0
+
+    close_location_value = _as_float(snapshot, "close_location_value")
+    if close_location_value is not None:
+        if close_location_value >= 0.7:
+            candle_bonus += 2
+            reasons.append("하단 꼬리 이후 종가가 일중 상단에서 마감")
+        elif close_location_value <= 0.35:
+            risks.append("종가가 일중 하단에 머물러 매수 우위 확인이 약함")
+
+    lower_wick_ratio = _as_float(snapshot, "lower_wick_ratio")
+    if lower_wick_ratio is not None and lower_wick_ratio >= 0.4:
+        candle_bonus += 2
+
+    if bool(snapshot.get("gap_down_reclaim", False)):
+        candle_bonus += 3
+        reasons.append("gap 하락 이후 회복 흐름이 확인됨")
+
+    score = min(score + candle_bonus, 25)
     if close >= sma_5:
         reasons.append("5일선 회복 또는 회복 시도")
     else:

@@ -215,8 +215,9 @@ def latest_weekly_context(bars: Iterable[DailyBar]) -> dict[str, float | int | b
     }
 
 
-def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | str | None]]:
+def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | str | bool | None]]:
     rows = sorted(bars, key=lambda bar: bar.trading_date)
+    opens = [bar.open for bar in rows]
     closes = [bar.close for bar in rows]
     highs = [bar.high for bar in rows]
     lows = [bar.low for bar in rows]
@@ -236,8 +237,26 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
         None if upper is None or lower is None or close == 0 else ((upper - lower) / close) * 100.0
         for upper, lower, close in zip(bb["upper"], bb["lower"], closes)
     ]
+    close_above_open = [close >= open_price for open_price, close in zip(opens, closes)]
+    close_location_value = [
+        None if high == low else (close - low) / (high - low)
+        for high, low, close in zip(highs, lows, closes)
+    ]
+    lower_wick_ratio = [
+        None if high == low else (min(open_price, close) - low) / (high - low)
+        for open_price, high, low, close in zip(opens, highs, lows, closes)
+    ]
+    previous_closes: list[float | None] = [None, *closes[:-1]]
+    gap_down_pct = [
+        None if previous_close in (None, 0) else ((open_price / previous_close) - 1.0) * 100.0
+        for open_price, previous_close in zip(opens, previous_closes)
+    ]
+    gap_down_reclaim = [
+        bool(gap_pct is not None and gap_pct < 0 and previous_close is not None and close >= previous_close)
+        for gap_pct, previous_close, close in zip(gap_down_pct, previous_closes, closes)
+    ]
 
-    enriched: list[dict[str, float | str | None]] = []
+    enriched: list[dict[str, float | str | bool | None]] = []
     for index, bar in enumerate(rows):
         enriched.append(
             {
@@ -259,6 +278,11 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
                 "atr_14_pct": atr14_pct[index],
                 "daily_range_pct": daily_range_pct[index],
                 "bb_width_pct": bb_width_pct[index],
+                "close_above_open": close_above_open[index],
+                "close_location_value": close_location_value[index],
+                "lower_wick_ratio": lower_wick_ratio[index],
+                "gap_down_pct": gap_down_pct[index],
+                "gap_down_reclaim": gap_down_reclaim[index],
                 "rsi_14": rsi14[index],
                 "distance_to_20d_low": dist20[index],
                 "distance_to_60d_low": dist60[index],
