@@ -3,10 +3,10 @@
 NASDAQ-100 종목을 매일 추적하면서, Bollinger Bands 하단 근처에 위치하고 최근 저점 형성 후 turnaround 가능성이 있는 후보를 추려내는 개인용 투자 리서치 스크리너입니다.
 
 ## Status
-- Phase 0, architecture and documentation bootstrapped
-- Core Python scaffold and CLI placeholder pipeline added
+- Daily screener + staged intraday collector are runnable
 - OpenClaw secret wiring strategy defined
 - Oracle SQL / Oracle Mongo API access paths confirmed separately
+- Oracle SQL write path is implemented for daily and intraday runs (opt-in)
 
 ## Goals
 - NASDAQ-100 전체를 매일 스캔
@@ -63,10 +63,14 @@ python -m venv .venv
 pip install -e '.[dev]'
 python -m screener.cli.main run --date 2026-04-21 --dry-run
 python -m screener.cli.main run --date 2026-04-21
+python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
+python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --persist-oracle-sql
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
+python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install --persist-oracle-sql
 python scripts/run_daily.py --date 2026-04-21
 python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday
+python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --persist-oracle-sql
 pytest
 ```
 
@@ -88,6 +92,7 @@ pytest
 - 결과는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 저장되며, metadata에는 성공/실패, minute batch, remaining ticker, 이번 window에서 미수집된 ticker가 함께 기록됩니다.
 - 실무 흐름은 장중 collector가 staged snapshots를 쌓고, 장 마감 후 daily screener가 최종 후보/리포트를 생성하는 2단 구조입니다.
 - `--use-staged-intraday` 또는 `SCREENER_DAILY_INTRADAY_SOURCE_MODE=prefer-staged` 를 사용하면 해당 날짜의 가장 최근 staged intraday quotes를 찾아 마지막 일봉 bar를 같은 날짜 snapshot으로 교체하거나, 새 날짜면 append 합니다. artifacts가 없으면 기존 provider history로 그대로 fallback 합니다.
+- `--persist-oracle-sql` 또는 `SCREENER_ORACLE_SQL_ENABLED=1` 을 사용하면 성공한 daily/intraday 결과를 Oracle SQL에 저장합니다. credential은 `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING` 환경변수 또는 OpenClaw secrets(`/oracleDb/*`)에서 읽습니다.
 - 예시:
   ```bash
   python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0

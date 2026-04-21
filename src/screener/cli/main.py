@@ -5,9 +5,11 @@ from pathlib import Path
 
 import typer
 
-from screener.collector import TwelveDataWindowCollector
-from screener.config import get_settings
+from screener.collector import CollectionResult, TwelveDataWindowCollector
+from screener.config import Settings, get_settings
+from screener.models import ScreenRunResult
 from screener.pipeline import ScreenPipeline, build_context
+from screener.storage import OracleSqlStorage, OracleSqlStorageError
 
 app = typer.Typer(help="NASDAQ turnaround screener CLI.")
 
@@ -31,12 +33,15 @@ def run(
     output_dir: Path = typer.Option(Path("output"), help="Directory for generated artifacts."),
     use_staged_intraday: bool = typer.Option(False, "--use-staged-intraday", help="Prefer latest staged intraday quotes from output/intraday for same-day enrichment when available."),
     intraday_output_root: Path | None = typer.Option(None, "--intraday-output-root", help="Override staged intraday artifact root used with --use-staged-intraday."),
+    persist_oracle_sql: bool = typer.Option(False, "--persist-oracle-sql", help="Write successful run results to Oracle SQL."),
 ) -> None:
     settings = get_settings(output_dir=output_dir)
     if use_staged_intraday:
         settings.daily_intraday_source_mode = "prefer-staged"
     if intraday_output_root is not None:
         settings.intraday_output_root = intraday_output_root
+    if persist_oracle_sql:
+        settings.oracle_sql_enabled = True
     context = build_context(run_date=parse_run_date(run_date), dry_run=dry_run, output_dir=settings.output_dir, run_mode=settings.default_run_mode, universe_name=settings.universe_name)
     result, artifacts = ScreenPipeline(settings=settings).run(context)
 
@@ -50,9 +55,12 @@ def run(
         typer.echo("Artifacts skipped (--dry-run).")
         return
 
+    run_id = _persist_daily_run_if_enabled(settings, result)
     typer.echo(f"Markdown report: {artifacts.markdown_path}")
     typer.echo(f"JSON report: {artifacts.json_report_path}")
     typer.echo(f"Metadata report: {artifacts.metadata_path}")
+    if run_id is not None:
+        typer.echo(f"Oracle SQL run id: {run_id}")
 
 
 @app.command("collect-window")
@@ -63,8 +71,11 @@ def collect_window(
     max_credits_per_minute: int = typer.Option(8, min=1, help="Per-minute request budget."),
     dry_run: bool = typer.Option(False, help="Plan and execute the window without writing artifacts."),
     output_dir: Path = typer.Option(Path("output/intraday"), help="Root directory for intraday collection artifacts."),
+    persist_oracle_sql: bool = typer.Option(False, "--persist-oracle-sql", help="Write successful collection results to Oracle SQL."),
 ) -> None:
     settings = get_settings(output_dir=output_dir, market_data_provider="twelve-data")
+    if persist_oracle_sql:
+        settings.oracle_sql_enabled = True
     collector = TwelveDataWindowCollector(settings=settings)
     result = collector.run_window(
         run_date=parse_run_date(run_date),
@@ -85,9 +96,46 @@ def collect_window(
         typer.echo("Artifacts skipped (--dry-run).")
         return
 
+    collection_run_id = _persist_intraday_run_if_enabled(settings, result)
     typer.echo(f"Run directory: {result.artifacts.run_directory}")
     typer.echo(f"Metadata report: {result.artifacts.metadata_path}")
     typer.echo(f"Quotes report: {result.artifacts.quotes_path}")
+    if collection_run_id is not None:
+        typer.echo(f"Oracle SQL collection id: {collection_run_id}")
+
+
+def _persist_daily_run_if_enabled(settings: Settings, result: ScreenRunResult) -> str | None:
+    try:
+        storage = OracleSqlStorage.from_settings(settings)
+    except OracleSqlStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    if storage is None:
+        return None
+
+    try:
+        return storage.persist_daily_run(result)
+    except OracleSqlStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+
+def _persist_intraday_run_if_enabled(settings: Settings, result: CollectionResult) -> str | None:
+    try:
+        storage = OracleSqlStorage.from_settings(settings)
+    except OracleSqlStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    if storage is None:
+        return None
+
+    try:
+        return storage.persist_intraday_collection(result)
+    except OracleSqlStorageError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

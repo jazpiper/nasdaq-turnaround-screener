@@ -13,8 +13,8 @@ DEFAULT_INTRADAY_WINDOW_IDS: tuple[str, ...] = (
     "power-hour-2",
 )
 DEFAULT_COLLECTOR_COMMAND_TEMPLATE = (
-    "{python} -m screener.cli.collect_intraday "
-    "--date {date} --window-id {window_id} --output-dir {output_dir}"
+    "{python} -m screener.cli.main collect-window "
+    "--date {date} --window-index {window_index} --output-dir {output_root}"
 )
 
 
@@ -56,14 +56,18 @@ def build_collector_command(
     python_path: Path,
     run_date: str,
     window_id: str,
+    window_index: int,
     output_dir: Path,
+    output_root: Path,
     project_root: Path,
 ) -> list[str]:
     formatted = command_template.format(
         python=shlex.quote(str(python_path)),
         date=shlex.quote(run_date),
         window_id=shlex.quote(normalize_window_id(window_id)),
+        window_index=window_index,
         output_dir=shlex.quote(str(output_dir)),
+        output_root=shlex.quote(str(output_root)),
         project_root=shlex.quote(str(project_root)),
     )
     return shlex.split(formatted)

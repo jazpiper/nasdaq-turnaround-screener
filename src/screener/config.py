@@ -33,6 +33,10 @@ class Settings:
     intraday_output_root: Path = DEFAULT_INTRADAY_OUTPUT_ROOT
     intraday_collector_command: str | None = None
     daily_intraday_source_mode: str = "disabled"
+    oracle_sql_enabled: bool = False
+    oracle_sql_user: str | None = None
+    oracle_sql_password: str | None = None
+    oracle_sql_connect_string: str | None = None
 
 
 def get_settings(
@@ -55,6 +59,10 @@ def get_settings(
         intraday_output_root=Path(os.getenv("SCREENER_INTRADAY_OUTPUT_ROOT", DEFAULT_INTRADAY_OUTPUT_ROOT)),
         intraday_collector_command=_coerce_optional_string(os.getenv("SCREENER_INTRADAY_COLLECTOR_COMMAND")),
         daily_intraday_source_mode=(os.getenv("SCREENER_DAILY_INTRADAY_SOURCE_MODE", "disabled").strip().lower() or "disabled"),
+        oracle_sql_enabled=_coerce_bool(os.getenv("SCREENER_ORACLE_SQL_ENABLED"), default=False),
+        oracle_sql_user=_coerce_optional_string(os.getenv("ORACLE_DB_USER")) or _coerce_optional_string(secrets.get("/oracleDb/user") if secrets else None),
+        oracle_sql_password=_coerce_optional_string(os.getenv("ORACLE_DB_PASSWORD")) or _coerce_optional_string(secrets.get("/oracleDb/password") if secrets else None),
+        oracle_sql_connect_string=_coerce_optional_string(os.getenv("ORACLE_DB_CONNECT_STRING")) or _coerce_optional_string(secrets.get("/oracleDb/connectString") if secrets else None),
     )
     if output_dir is not None:
         settings.output_dir = Path(output_dir)
@@ -70,3 +78,14 @@ def _coerce_optional_string(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _coerce_bool(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default

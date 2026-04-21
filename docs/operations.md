@@ -22,6 +22,7 @@ python -m screener.cli.main run --date 2026-04-21 --output-dir output/manual-202
 ### Cron-friendly intraday window runner
 ```bash
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
+python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install --persist-oracle-sql
 ```
 
 runner 동작:
@@ -42,6 +43,7 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id power-hour-2
 ```bash
 python scripts/run_daily.py --date 2026-04-21
 python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday
+python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --persist-oracle-sql
 ```
 
 runner 동작:
@@ -92,6 +94,8 @@ cd /path/to/nasdaq-screener-ops && python scripts/run_daily.py --skip-install
 - `SCREENER_INTRADAY_WINDOW_IDS`: 기본 6-window 목록 override
 - `SCREENER_INTRADAY_OUTPUT_ROOT`: 장중 snapshot root override
 - `SCREENER_INTRADAY_COLLECTOR_COMMAND`: collector command template override
+- `SCREENER_ORACLE_SQL_ENABLED=1`: successful daily/intraday runs를 Oracle SQL에도 기록
+- `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING`: Oracle SQL env override (기본은 OpenClaw secrets `/oracleDb/*`)
 
 ## 4. Secrets policy
 - Oracle SQL, Mongo, API key 등 credential은 OpenClaw secrets에서 관리

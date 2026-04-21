@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-install", action="store_true", help="Create/use .venv but skip dependency installation.")
     parser.add_argument("--use-staged-intraday", action="store_true", help="Prefer latest staged intraday quotes for same-day enrichment when available.")
     parser.add_argument("--intraday-output-root", type=Path, default=None, help="Override intraday artifact root used with --use-staged-intraday.")
+    parser.add_argument("--persist-oracle-sql", action="store_true", help="Write successful daily run results to Oracle SQL.")
     return parser.parse_args()
 
 
@@ -95,6 +96,7 @@ def run_screener(
     dry_run: bool,
     use_staged_intraday: bool,
     intraday_output_root: Path | None,
+    persist_oracle_sql: bool,
 ) -> int:
     command = [
         str(python_path),
@@ -112,6 +114,8 @@ def run_screener(
         command.append("--use-staged-intraday")
     if intraday_output_root is not None:
         command.extend(["--intraday-output-root", str(intraday_output_root)])
+    if persist_oracle_sql:
+        command.append("--persist-oracle-sql")
 
     completed = subprocess.run(command, cwd=root)
     return completed.returncode
@@ -132,6 +136,7 @@ def main() -> int:
         args.dry_run,
         args.use_staged_intraday,
         args.intraday_output_root,
+        args.persist_oracle_sql,
     )
     if exit_code != 0:
         return exit_code

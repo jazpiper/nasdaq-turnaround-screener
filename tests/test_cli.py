@@ -78,6 +78,14 @@ def test_run_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert not any(tmp_path.iterdir())
 
 
+class StubOracleSqlStorage:
+    def persist_daily_run(self, result):
+        return "run_test"
+
+    def persist_intraday_collection(self, result):
+        return "intraday_test"
+
+
 class StubCollector:
     def __init__(self, settings):
         self.settings = settings
@@ -140,6 +148,20 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert payload["candidates"][0]["ticker"] == "AAPL"
 
 
+def test_run_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", StubPipeline)
+    monkeypatch.setattr("screener.cli.main.OracleSqlStorage.from_settings", lambda settings: StubOracleSqlStorage())
+
+    result = runner.invoke(
+        app,
+        ["run", "--date", "2026-04-21", "--output-dir", str(tmp_path), "--persist-oracle-sql"],
+    )
+
+    assert result.exit_code == 0
+    assert "Oracle SQL run id: run_test" in result.stdout
+
+
+
 def test_collect_window_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", StubCollector)
 
@@ -152,6 +174,29 @@ def test_collect_window_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert "Window: 1/6" in result.stdout
     assert "Remaining after window: 83" in result.stdout
     assert (tmp_path / "2026-04-21" / "window-01-of-06" / "run-20260421T073000Z" / "collection-metadata.json").exists()
+
+
+def test_collect_window_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", StubCollector)
+    monkeypatch.setattr("screener.cli.main.OracleSqlStorage.from_settings", lambda settings: StubOracleSqlStorage())
+
+    result = runner.invoke(
+        app,
+        [
+            "collect-window",
+            "--date",
+            "2026-04-21",
+            "--window-index",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+            "--persist-oracle-sql",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Oracle SQL collection id: intraday_test" in result.stdout
+
 
 
 def test_collect_window_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> None:

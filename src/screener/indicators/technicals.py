@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from datetime import timedelta
 from math import sqrt
 from typing import Iterable
 
@@ -113,6 +114,78 @@ def volume_ratio(volumes: Iterable[float], window: int = 20) -> list[float | Non
         else:
             result.append(value / average)
     return result
+
+
+def aggregate_weekly_bars(bars: Iterable[DailyBar]) -> list[DailyBar]:
+    daily_bars = sorted(bars, key=lambda bar: bar.trading_date)
+    weekly: list[DailyBar] = []
+    current_week: list[DailyBar] = []
+    current_week_key = None
+
+    for bar in daily_bars:
+        week_key = bar.trading_date - timedelta(days=bar.trading_date.weekday())
+        if current_week and week_key != current_week_key:
+            weekly.append(_merge_weekly_bar(current_week))
+            current_week = []
+        current_week_key = week_key
+        current_week.append(bar)
+
+    if current_week:
+        weekly.append(_merge_weekly_bar(current_week))
+
+    return weekly
+
+
+def _merge_weekly_bar(bars: list[DailyBar]) -> DailyBar:
+    first = bars[0]
+    last = bars[-1]
+    return DailyBar(
+        ticker=first.ticker,
+        trading_date=last.trading_date,
+        open=first.open,
+        high=max(bar.high for bar in bars),
+        low=min(bar.low for bar in bars),
+        close=last.close,
+        adj_close=last.adj_close,
+        volume=sum(bar.volume for bar in bars),
+    )
+
+
+def latest_weekly_context(bars: Iterable[DailyBar]) -> dict[str, float | int | bool | None]:
+    weekly_bars = aggregate_weekly_bars(bars)
+    closes = [bar.close for bar in weekly_bars]
+    sma5 = rolling_mean(closes, 5)
+    sma10 = rolling_mean(closes, 10)
+    latest_close = closes[-1] if closes else None
+    latest_sma5 = sma5[-1] if sma5 else None
+    latest_sma10 = sma10[-1] if sma10 else None
+    previous_close = closes[-2] if len(closes) >= 2 else None
+    improving = bool(latest_close is not None and previous_close is not None and latest_close >= previous_close)
+
+    severe_damage = False
+    if latest_close is not None and latest_sma10 not in (None, 0) and latest_sma5 is not None:
+        severe_damage = (
+            latest_close < latest_sma10 * 0.85
+            and latest_sma5 < latest_sma10
+            and not improving
+        )
+
+    trend_penalty = 0.0
+    if latest_close is not None and latest_sma10 not in (None, 0) and latest_sma5 is not None:
+        if latest_close < latest_sma10 * 0.9 and latest_sma5 < latest_sma10 and not improving:
+            trend_penalty = 6.0
+        elif latest_close < latest_sma10 * 0.95 and latest_sma5 < latest_sma10 and not improving:
+            trend_penalty = 3.0
+
+    return {
+        "weekly_bars_available": len(weekly_bars),
+        "weekly_close": latest_close,
+        "weekly_sma_5": latest_sma5,
+        "weekly_sma_10": latest_sma10,
+        "weekly_close_improving": improving,
+        "weekly_trend_severe_damage": severe_damage,
+        "weekly_trend_penalty": trend_penalty,
+    }
 
 
 def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | str | None]]:

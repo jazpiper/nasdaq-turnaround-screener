@@ -55,11 +55,13 @@ def test_intraday_output_dir_nests_date_and_window() -> None:
 
 def test_build_collector_command_expands_placeholders() -> None:
     command = build_collector_command(
-        command_template="{python} -m demo.collect --date {date} --window-id {window_id} --output-dir {output_dir} --root {project_root}",
+        command_template="{python} -m demo.collect --date {date} --window-id {window_id} --window-index {window_index} --output-dir {output_dir} --output-root {output_root} --root {project_root}",
         python_path=Path("/tmp/project/.venv/bin/python"),
         run_date="2026-04-21",
         window_id="Open-1",
+        window_index=0,
         output_dir=Path("/tmp/project/output/intraday/2026-04-21/open-1"),
+        output_root=Path("/tmp/project/output/intraday"),
         project_root=Path("/tmp/project"),
     )
 
@@ -71,8 +73,12 @@ def test_build_collector_command_expands_placeholders() -> None:
         "2026-04-21",
         "--window-id",
         "open-1",
+        "--window-index",
+        "0",
         "--output-dir",
         "/tmp/project/output/intraday/2026-04-21/open-1",
+        "--output-root",
+        "/tmp/project/output/intraday",
         "--root",
         "/tmp/project",
     ]

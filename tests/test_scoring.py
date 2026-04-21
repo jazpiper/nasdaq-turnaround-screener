@@ -25,6 +25,8 @@ def make_snapshot(ticker: str, **overrides):
         "close_improvement_streak": 2,
         "rsi_3d_change": 4.0,
         "market_context_score": 10.0,
+        "weekly_trend_severe_damage": False,
+        "weekly_trend_penalty": 0.0,
     }
     snapshot.update(overrides)
     return snapshot
@@ -39,6 +41,10 @@ class ScoringTests(unittest.TestCase):
     def test_filter_candidates_rejects_insufficient_liquidity(self):
         rows = [make_snapshot("AAPL", average_volume_20d=100_000.0)]
         self.assertEqual(filter_candidates(rows), [])
+    def test_filter_candidates_rejects_severely_broken_weekly_trend(self):
+        rows = [make_snapshot("AAPL", weekly_trend_severe_damage=True)]
+        self.assertEqual(filter_candidates(rows), [])
+
 
     def test_rank_candidates_orders_by_score(self):
         rows = [
@@ -56,6 +62,12 @@ class ScoringTests(unittest.TestCase):
         ])[0]
         self.assertTrue(any("거래량" in risk for risk in candidate.risks))
         self.assertTrue(any("시장/섹터" in risk for risk in candidate.risks))
+
+    def test_rank_candidates_adds_weekly_trend_risk_when_penalized(self):
+        candidate = rank_candidates([
+            make_snapshot("WEEKLY", weekly_trend_penalty=6.0, market_context_score=4.0)
+        ])[0]
+        self.assertTrue(any("주봉 추세" in risk for risk in candidate.risks))
 
 
 if __name__ == "__main__":

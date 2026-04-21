@@ -66,6 +66,8 @@ def filter_candidates(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         if not near_recent_low(row):
             continue
+        if bool(row.get("weekly_trend_severe_damage", False)):
+            continue
         candidates.append(row)
     return candidates
 
@@ -133,6 +135,8 @@ def _score_volume(snapshot: dict[str, Any], reasons: list[str], risks: list[str]
 def _score_market_context(snapshot: dict[str, Any], risks: list[str]) -> int:
     market_context = float(snapshot.get("market_context_score", 10.0))
     score = int(round(_clip(market_context / 15.0) * 15))
+    if float(snapshot.get("weekly_trend_penalty", 0.0)) >= 3.0:
+        risks.append("주봉 추세가 아직 약해 강한 반전 확인이 더 필요함")
     if score <= 6:
         risks.append("시장/섹터 맥락 확인이 필요함")
     return score

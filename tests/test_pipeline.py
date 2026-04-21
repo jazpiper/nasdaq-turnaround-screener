@@ -18,15 +18,15 @@ from screener.pipeline import (
 )
 
 
-def make_history(*, start_close: float, days: int = 90, final_volume: float = 1_500_000.0) -> pd.DataFrame:
+def make_history(*, start_close: float, days: int = 90, final_volume: float = 1_500_000.0, rebound_days: int = 3, rebound_step: float = 0.01, decline_step: float = 0.4) -> pd.DataFrame:
     start = date(2026, 1, 1)
     rows: list[dict[str, float | date]] = []
     close = start_close
     for day in range(days):
-        if day < days - 3:
-            close -= 0.4
+        if day < days - rebound_days:
+            close -= decline_step
         else:
-            close += 0.01
+            close += rebound_step
         rows.append(
             {
                 "date": start + timedelta(days=day),
@@ -149,3 +149,31 @@ def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
     assert result.candidate_count >= 1
     assert artifacts.markdown_path is None
     assert not tmp_path.exists() or not any(tmp_path.iterdir())
+
+
+def test_indicator_engine_includes_weekly_context_and_penalty() -> None:
+    history = make_history(start_close=180.0, days=90, rebound_days=2, rebound_step=-0.2)
+    indicators = TechnicalIndicatorEngine().compute(
+        history,
+        TickerInput(ticker="AAPL"),
+        build_context(run_date=date(2026, 4, 21), dry_run=True),
+    )
+
+    assert indicators["weekly_bars_available"] >= 10
+    assert indicators["weekly_sma_10"] is not None
+    assert indicators["weekly_trend_penalty"] >= 3.0
+
+
+def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path: Path) -> None:
+    history = make_history(start_close=260.0, days=90, rebound_days=1, rebound_step=-1.5, decline_step=1.5)
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=tmp_path),
+        universe_provider=type("SingleTickerUniverse", (), {"load_universe": lambda self, context: [TickerInput(ticker="AAPL")]})(),
+        market_data_provider=YFinanceMarketDataProvider(fetcher=StubFetcher({"AAPL": make_bars_from_history("AAPL", history)})),
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=RankedCandidateScorer(),
+    )
+
+    result, _ = pipeline.run(build_context(run_date=date(2026, 4, 21), dry_run=True, output_dir=tmp_path))
+
+    assert result.candidate_count == 0

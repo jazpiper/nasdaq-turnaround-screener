@@ -8,7 +8,7 @@ import pandas as pd
 
 from screener.config import Settings
 from screener.data import MarketDataFetcher, YFinanceDailyBarFetcher, build_market_data_fetcher
-from screener.indicators.technicals import add_indicator_columns, rolling_mean
+from screener.indicators.technicals import add_indicator_columns, latest_weekly_context, rolling_mean
 from screener.intraday_artifacts import discover_latest_intraday_snapshot, merge_history_with_staged_quote
 from screener.models import (
     CandidateResult,
@@ -179,17 +179,20 @@ class TechnicalIndicatorEngine:
 
         from screener.data.market_data import normalize_ohlcv_rows
 
-        enriched_rows = add_indicator_columns(normalize_ohlcv_rows(ticker.ticker, bars))
+        normalized_bars = normalize_ohlcv_rows(ticker.ticker, bars)
+        enriched_rows = add_indicator_columns(normalized_bars)
         latest = dict(enriched_rows[-1])
         closes = [float(row["close"]) for row in enriched_rows]
         volumes = [float(row["volume"]) for row in enriched_rows]
         rsi_values = [row["rsi_14"] for row in enriched_rows]
+        weekly_context = latest_weekly_context(normalized_bars)
 
         latest["bars_available"] = len(enriched_rows)
         latest["average_volume_20d"] = rolling_mean(volumes, 20)[-1]
         latest["close_improvement_streak"] = _close_improvement_streak(closes)
         latest["rsi_3d_change"] = _latest_change(rsi_values, 3)
-        latest["market_context_score"] = 10.0
+        latest.update(weekly_context)
+        latest["market_context_score"] = 10.0 - float(weekly_context["weekly_trend_penalty"])
         return latest
 
 
