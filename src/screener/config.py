@@ -33,6 +33,7 @@ class Settings:
     intraday_output_root: Path = DEFAULT_INTRADAY_OUTPUT_ROOT
     intraday_collector_command: str | None = None
     daily_intraday_source_mode: str = "disabled"
+    earnings_calendar_path: Path | None = None
     oracle_sql_enabled: bool = False
     oracle_sql_user: str | None = None
     oracle_sql_password: str | None = None
@@ -48,7 +49,7 @@ def get_settings(
     resolved_secrets_path = Path(openclaw_secrets_path).expanduser() if openclaw_secrets_path is not None else default_openclaw_secrets_path()
     secrets = load_openclaw_secrets(resolved_secrets_path)
     resolved_twelve_data_api_key = twelve_data_api_key or os.getenv("TWELVE_DATA_API_KEY") or _coerce_optional_string(secrets.get("/twelveData/apiKey") if secrets else None)
-    resolved_market_data_provider = market_data_provider or os.getenv("SCREENER_MARKET_DATA_PROVIDER") or _default_market_data_provider(resolved_twelve_data_api_key)
+    resolved_market_data_provider = market_data_provider or os.getenv("SCREENER_MARKET_DATA_PROVIDER") or _default_market_data_provider()
 
     settings = Settings(
         market_data_provider=resolved_market_data_provider,
@@ -59,6 +60,7 @@ def get_settings(
         intraday_output_root=Path(os.getenv("SCREENER_INTRADAY_OUTPUT_ROOT", DEFAULT_INTRADAY_OUTPUT_ROOT)),
         intraday_collector_command=_coerce_optional_string(os.getenv("SCREENER_INTRADAY_COLLECTOR_COMMAND")),
         daily_intraday_source_mode=(os.getenv("SCREENER_DAILY_INTRADAY_SOURCE_MODE", "disabled").strip().lower() or "disabled"),
+        earnings_calendar_path=_coerce_optional_path(os.getenv("SCREENER_EARNINGS_CALENDAR_PATH")),
         oracle_sql_enabled=_coerce_bool(os.getenv("SCREENER_ORACLE_SQL_ENABLED"), default=False),
         oracle_sql_user=_coerce_optional_string(os.getenv("ORACLE_DB_USER")) or _coerce_optional_string(secrets.get("/oracleDb/user") if secrets else None),
         oracle_sql_password=_coerce_optional_string(os.getenv("ORACLE_DB_PASSWORD")) or _coerce_optional_string(secrets.get("/oracleDb/password") if secrets else None),
@@ -69,8 +71,8 @@ def get_settings(
     return settings
 
 
-def _default_market_data_provider(twelve_data_api_key: str | None) -> str:
-    return "twelve-data" if twelve_data_api_key else "yfinance"
+def _default_market_data_provider() -> str:
+    return "yfinance"
 
 
 def _coerce_optional_string(value: object) -> str | None:
@@ -78,6 +80,11 @@ def _coerce_optional_string(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _coerce_optional_path(value: object) -> Path | None:
+    text = _coerce_optional_string(value)
+    return None if text is None else Path(text).expanduser()
 
 
 def _coerce_bool(value: object, *, default: bool = False) -> bool:

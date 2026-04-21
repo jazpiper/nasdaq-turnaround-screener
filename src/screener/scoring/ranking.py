@@ -132,9 +132,33 @@ def _score_volume(snapshot: dict[str, Any], reasons: list[str], risks: list[str]
     return score
 
 
-def _score_market_context(snapshot: dict[str, Any], risks: list[str]) -> int:
+def _score_market_context(snapshot: dict[str, Any], reasons: list[str], risks: list[str]) -> int:
     market_context = float(snapshot.get("market_context_score", 10.0))
-    score = int(round(_clip(market_context / 15.0) * 15))
+    relative_strength_bonus = 0.0
+
+    rel_strength_20d = _as_float(snapshot, "rel_strength_20d_vs_qqq")
+    if rel_strength_20d is not None:
+        if rel_strength_20d >= 5.0:
+            relative_strength_bonus += 3.0
+            reasons.append("최근 20일 기준 QQQ 대비 상대적으로 덜 약함")
+        elif rel_strength_20d >= 2.0:
+            relative_strength_bonus += 1.5
+            reasons.append("시장 대비 상대강도가 개선되는 구간")
+        elif rel_strength_20d <= -5.0:
+            relative_strength_bonus -= 3.0
+            risks.append("최근 20일 기준 시장 대비 상대약세가 큼")
+
+    rel_strength_60d = _as_float(snapshot, "rel_strength_60d_vs_qqq")
+    if rel_strength_60d is not None:
+        if rel_strength_60d >= 4.0:
+            relative_strength_bonus += 1.5
+        elif rel_strength_60d <= -8.0:
+            relative_strength_bonus -= 2.0
+            risks.append("장세 반등 대비 추종력이 약할 수 있음")
+
+    adjusted_context = market_context + relative_strength_bonus
+    score = int(round(_clip(adjusted_context / 15.0) * 15))
+    snapshot["relative_strength_score"] = score
     if float(snapshot.get("weekly_trend_penalty", 0.0)) >= 3.0:
         risks.append("주봉 추세가 아직 약해 강한 반전 확인이 더 필요함")
     if score <= 6:
@@ -142,26 +166,49 @@ def _score_market_context(snapshot: dict[str, Any], risks: list[str]) -> int:
     return score
 
 
+def _apply_earnings_penalty(snapshot: dict[str, Any], risks: list[str]) -> int:
+    penalty = 0
+    days_to_next = snapshot.get("days_to_next_earnings")
+    if days_to_next is not None:
+        days_to_next = int(days_to_next)
+        if days_to_next <= 2:
+            penalty = max(penalty, 8)
+            risks.append("실적 발표가 임박해 이벤트 리스크가 큼")
+        elif days_to_next <= 5:
+            penalty = max(penalty, 4)
+            risks.append("실적 발표가 가까워 변동성 리스크가 있음")
+
+    days_since_last = snapshot.get("days_since_last_earnings")
+    if days_since_last is not None and int(days_since_last) <= 2:
+        penalty = max(penalty, 3)
+        risks.append("실적 발표 직후 변동성 구간일 수 있음")
+
+    return penalty
+
+
 def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
+    working_snapshot = dict(snapshot)
     reasons: list[str] = []
     risks: list[str] = []
     subscores = {
-        "oversold": _score_oversold(snapshot, reasons),
-        "bottom_context": _score_bottom_context(snapshot, reasons),
-        "reversal": _score_reversal(snapshot, reasons, risks),
-        "volume": _score_volume(snapshot, reasons, risks),
-        "market_context": _score_market_context(snapshot, risks),
+        "oversold": _score_oversold(working_snapshot, reasons),
+        "bottom_context": _score_bottom_context(working_snapshot, reasons),
+        "reversal": _score_reversal(working_snapshot, reasons, risks),
+        "volume": _score_volume(working_snapshot, reasons, risks),
+        "market_context": _score_market_context(working_snapshot, reasons, risks),
     }
-    score = sum(subscores.values())
-    if (_as_float(snapshot, "sma_20") or 0.0) < (_as_float(snapshot, "sma_60") or 0.0):
+    earnings_penalty = _apply_earnings_penalty(working_snapshot, risks)
+    working_snapshot["earnings_penalty"] = earnings_penalty
+    score = max(sum(subscores.values()) - earnings_penalty, 0)
+    if (_as_float(working_snapshot, "sma_20") or 0.0) < (_as_float(working_snapshot, "sma_60") or 0.0):
         risks.append("중기 추세는 아직 하락 압력일 수 있음")
     return ScreenCandidate(
-        ticker=str(snapshot["ticker"]),
+        ticker=str(working_snapshot["ticker"]),
         score=score,
         subscores=subscores,
         reasons=list(dict.fromkeys(reasons)),
         risks=list(dict.fromkeys(risks)),
-        snapshot=snapshot,
+        snapshot=working_snapshot,
         generated_at=datetime.now(timezone.utc).isoformat(),
     )
 

@@ -110,6 +110,21 @@ def normalize_ohlcv_rows(ticker: str, rows: Iterable[Mapping[str, Any]]) -> list
     return sorted(normalized, key=lambda bar: bar.trading_date)
 
 
+def _flatten_yfinance_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    flattened: list[dict[str, Any]] = []
+    for row in rows:
+        normalized_row: dict[str, Any] = {}
+        for key, value in row.items():
+            if isinstance(key, tuple):
+                parts = [str(part) for part in key if part not in (None, "")]
+                normalized_key = parts[-1] if len(parts) > 1 else parts[0]
+            else:
+                normalized_key = str(key)
+            normalized_row[normalized_key] = value
+        flattened.append(normalized_row)
+    return flattened
+
+
 class YFinanceDailyBarFetcher:
     """Fetch daily OHLCV bars via yfinance while keeping the rest of the code provider-agnostic."""
 
@@ -146,7 +161,7 @@ class YFinanceDailyBarFetcher:
         for ticker in ticker_list:
             try:
                 ticker_frame = data[ticker] if len(ticker_list) > 1 else data
-                rows = ticker_frame.reset_index().to_dict("records")
+                rows = _flatten_yfinance_rows(ticker_frame.reset_index().to_dict("records"))
                 bars = normalize_ohlcv_rows(ticker, rows)
                 if not bars:
                     raise ValueError("No price rows returned")

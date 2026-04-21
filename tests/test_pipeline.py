@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from screener.config import Settings
+from screener.data.earnings import EarningsInfo
 from screener.models import TickerInput
 from screener.pipeline import (
     RankedCandidateScorer,
@@ -78,9 +79,26 @@ def make_bars_from_history(ticker: str, history: pd.DataFrame):
     ]
 
 
+def make_benchmark_provider() -> YFinanceMarketDataProvider:
+    return YFinanceMarketDataProvider(
+        fetcher=StubFetcher({"QQQ": make_bars_from_history("QQQ", make_history(start_close=500.0, decline_step=0.2))})
+    )
+
+
 class StubUniverseProvider:
     def load_universe(self, context):
         return [TickerInput(ticker="AAPL"), TickerInput(ticker="MSFT"), TickerInput(ticker="NVDA")]
+
+
+class StubEarningsProvider:
+    def fetch(self, tickers, run_date):
+        return {
+            "AAPL": EarningsInfo(
+                next_earnings_date=date(2026, 4, 23),
+                days_to_next_earnings=2,
+                days_since_last_earnings=40,
+            )
+        }
 
 
 def test_static_universe_provider_loads_real_universe() -> None:
@@ -105,6 +123,8 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
         market_data_provider=provider,
         indicator_engine=TechnicalIndicatorEngine(),
         candidate_scorer=RankedCandidateScorer(),
+        earnings_calendar_provider=StubEarningsProvider(),
+        benchmark_market_data_provider=make_benchmark_provider(),
     )
     context = build_context(
         run_date=date(2026, 4, 21),
@@ -118,9 +138,15 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert any(candidate.ticker == "AAPL" for candidate in result.candidates)
     candidate = next(candidate for candidate in result.candidates if candidate.ticker == "AAPL")
     assert candidate.indicator_snapshot is not None
-    assert candidate.indicator_snapshot["schema_version"] == 1
+    assert candidate.indicator_snapshot["schema_version"] == 2
+    assert candidate.indicator_snapshot["earnings_data_available"] is True
+    assert candidate.indicator_snapshot["days_to_next_earnings"] == 2
+    assert candidate.indicator_snapshot["earnings_penalty"] == 8
+    assert "rel_strength_20d_vs_qqq" in candidate.indicator_snapshot
+    assert "relative_strength_score" in candidate.indicator_snapshot
     assert "volume_ratio_20d" in candidate.indicator_snapshot
     assert "weekly_trend_penalty" in candidate.indicator_snapshot
+    assert "실적 발표가 임박해 이벤트 리스크가 큼" in candidate.risks
     assert result.metadata.data_failures == ["NVDA: No price rows returned"]
     assert artifacts.markdown_path == tmp_path / "daily-report.md"
     assert artifacts.json_report_path == tmp_path / "daily-report.json"
@@ -136,6 +162,26 @@ def test_build_market_data_provider_uses_settings_choice() -> None:
     assert provider.fetcher.api_key == "secret"
 
 
+def test_pipeline_sets_earnings_data_unavailable_when_provider_missing(tmp_path: Path) -> None:
+    histories = {
+        "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
+    }
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=tmp_path),
+        universe_provider=type("SingleTickerUniverse", (), {"load_universe": lambda self, context: [TickerInput(ticker="AAPL")]})(),
+        market_data_provider=YFinanceMarketDataProvider(fetcher=StubFetcher(histories)),
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=RankedCandidateScorer(),
+        benchmark_market_data_provider=make_benchmark_provider(),
+    )
+
+    result, _ = pipeline.run(build_context(run_date=date(2026, 4, 21), dry_run=True, output_dir=tmp_path))
+
+    candidate = result.candidates[0]
+    assert candidate.indicator_snapshot is not None
+    assert candidate.indicator_snapshot["earnings_data_available"] is False
+
+
 def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
     histories = {
         "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
@@ -146,6 +192,7 @@ def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
         market_data_provider=YFinanceMarketDataProvider(fetcher=StubFetcher(histories)),
         indicator_engine=TechnicalIndicatorEngine(),
         candidate_scorer=RankedCandidateScorer(),
+        benchmark_market_data_provider=make_benchmark_provider(),
     )
     context = build_context(run_date=date(2026, 4, 21), dry_run=True, output_dir=tmp_path)
 
@@ -177,6 +224,7 @@ def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path:
         market_data_provider=YFinanceMarketDataProvider(fetcher=StubFetcher({"AAPL": make_bars_from_history("AAPL", history)})),
         indicator_engine=TechnicalIndicatorEngine(),
         candidate_scorer=RankedCandidateScorer(),
+        benchmark_market_data_provider=make_benchmark_provider(),
     )
 
     result, _ = pipeline.run(build_context(run_date=date(2026, 4, 21), dry_run=True, output_dir=tmp_path))

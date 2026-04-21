@@ -7,7 +7,14 @@ from typing import Any, Protocol, runtime_checkable
 import pandas as pd
 
 from screener.config import Settings
-from screener.data import MarketDataFetcher, YFinanceDailyBarFetcher, build_market_data_fetcher
+from screener.data import (
+    EarningsCalendarProvider,
+    EarningsInfo,
+    FileBackedEarningsCalendarProvider,
+    MarketDataFetcher,
+    YFinanceDailyBarFetcher,
+    build_market_data_fetcher,
+)
 from screener.indicators.technicals import add_indicator_columns, latest_weekly_context, rolling_mean
 from screener.intraday_artifacts import discover_latest_intraday_snapshot, merge_history_with_staged_quote
 from screener.models import (
@@ -25,7 +32,8 @@ from screener.scoring import rank_candidates
 from screener.storage.files import ensure_directory, write_json, write_text
 from screener.universe import load_static_universe
 
-INDICATOR_SNAPSHOT_SCHEMA_VERSION = 1
+INDICATOR_SNAPSHOT_SCHEMA_VERSION = 2
+BENCHMARK_TICKER = "QQQ"
 INDICATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "close",
     "low",
@@ -41,6 +49,18 @@ INDICATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "close_improvement_streak",
     "rsi_3d_change",
     "market_context_score",
+    "qqq_return_20d",
+    "qqq_return_60d",
+    "stock_return_20d",
+    "stock_return_60d",
+    "rel_strength_20d_vs_qqq",
+    "rel_strength_60d_vs_qqq",
+    "relative_strength_score",
+    "earnings_data_available",
+    "next_earnings_date",
+    "days_to_next_earnings",
+    "days_since_last_earnings",
+    "earnings_penalty",
     "weekly_bars_available",
     "weekly_close",
     "weekly_sma_5",
@@ -216,9 +236,17 @@ class TechnicalIndicatorEngine:
         latest["average_volume_20d"] = rolling_mean(volumes, 20)[-1]
         latest["close_improvement_streak"] = _close_improvement_streak(closes)
         latest["rsi_3d_change"] = _latest_change(rsi_values, 3)
+        latest["stock_return_20d"] = _percent_return(closes, 20)
+        latest["stock_return_60d"] = _percent_return(closes, 60)
         latest.update(weekly_context)
         latest["market_context_score"] = 10.0 - float(weekly_context["weekly_trend_penalty"])
         return latest
+
+
+def build_earnings_calendar_provider(settings: Settings) -> EarningsCalendarProvider | None:
+    if settings.earnings_calendar_path is None:
+        return None
+    return FileBackedEarningsCalendarProvider(settings.earnings_calendar_path)
 
 
 class RankedCandidateScorer:
@@ -257,22 +285,41 @@ class ScreenPipeline:
         market_data_provider: MarketDataProvider | None = None,
         indicator_engine: IndicatorEngine | None = None,
         candidate_scorer: CandidateScorer | None = None,
+        earnings_calendar_provider: EarningsCalendarProvider | None = None,
+        benchmark_market_data_provider: MarketDataProvider | None = None,
     ) -> None:
         self.settings = settings
         self.universe_provider = universe_provider or StaticUniverseProvider()
         self.market_data_provider = market_data_provider or build_market_data_provider(settings)
         self.indicator_engine = indicator_engine or TechnicalIndicatorEngine()
         self.candidate_scorer = candidate_scorer or RankedCandidateScorer()
+        self.earnings_calendar_provider = earnings_calendar_provider or build_earnings_calendar_provider(settings)
+        self.benchmark_market_data_provider = benchmark_market_data_provider or build_market_data_provider(settings)
 
     def run(self, context: PipelineContext) -> tuple[ScreenRunResult, RunArtifacts]:
         generated_at = context.generated_at
         tickers = self.universe_provider.load_universe(context)
         candidates: list[CandidateResult] = []
         failures: list[str] = []
+        notes = list(self.settings.default_notes)
 
         prepare = getattr(self.market_data_provider, "prepare", None)
         if callable(prepare):
             prepare(tickers, context)
+
+        earnings_by_ticker: dict[str, EarningsInfo] = {}
+        if self.earnings_calendar_provider is not None:
+            try:
+                earnings_by_ticker = self.earnings_calendar_provider.fetch([item.ticker for item in tickers], context.run_date)
+            except Exception as exc:  # pragma: no cover, defensive integration guard
+                notes.append(f"Earnings calendar unavailable: {exc}")
+
+        benchmark_context: dict[str, Any] = {}
+        if self.benchmark_market_data_provider is not None:
+            try:
+                benchmark_context = fetch_benchmark_context(self.benchmark_market_data_provider, context)
+            except Exception as exc:  # pragma: no cover, defensive integration guard
+                notes.append(f"Benchmark context unavailable: {exc}")
 
         provider_failures = getattr(self.market_data_provider, "failures", {})
         if isinstance(provider_failures, dict):
@@ -284,6 +331,8 @@ class ScreenPipeline:
             try:
                 history = self.market_data_provider.fetch_history(ticker, context)
                 indicators = self.indicator_engine.compute(history, ticker, context)
+                indicators = merge_benchmark_context(indicators, benchmark_context)
+                indicators = merge_earnings_context(indicators, earnings_by_ticker.get(ticker.ticker))
                 candidate = self.candidate_scorer.evaluate(ticker, indicators, context)
                 if candidate is not None:
                     candidates.append(candidate)
@@ -301,7 +350,7 @@ class ScreenPipeline:
                 dry_run=context.dry_run,
                 artifact_directory=context.output_dir,
                 data_failures=failures,
-                notes=list(self.settings.default_notes),
+                notes=notes,
             ),
             candidates=candidates,
         )
@@ -361,6 +410,61 @@ def _latest_change(values: list[float | None], periods: int) -> float:
     if len(valid) <= periods:
         return 0.0
     return valid[-1] - valid[-1 - periods]
+
+
+def _percent_return(closes: list[float], periods: int) -> float | None:
+    if len(closes) <= periods:
+        return None
+    previous_close = closes[-1 - periods]
+    if previous_close == 0:
+        return None
+    return ((closes[-1] / previous_close) - 1.0) * 100.0
+
+
+def fetch_benchmark_context(market_data_provider: MarketDataProvider, context: PipelineContext) -> dict[str, Any]:
+    benchmark = TickerInput(ticker=BENCHMARK_TICKER)
+    prepare = getattr(market_data_provider, "prepare", None)
+    if callable(prepare):
+        prepare([benchmark], context)
+    history = market_data_provider.fetch_history(benchmark, context)
+    closes = [float(value) for value in history.sort_values("date")["close"].tolist()]
+    benchmark_context = {
+        "qqq_return_20d": _percent_return(closes, 20),
+        "qqq_return_60d": _percent_return(closes, 60),
+    }
+    return benchmark_context
+
+
+def merge_benchmark_context(indicators: dict[str, Any], benchmark_context: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(indicators)
+    if not benchmark_context:
+        return merged
+
+    merged.update(benchmark_context)
+    stock_return_20d = merged.get("stock_return_20d")
+    qqq_return_20d = merged.get("qqq_return_20d")
+    if stock_return_20d is not None and qqq_return_20d is not None:
+        merged["rel_strength_20d_vs_qqq"] = float(stock_return_20d) - float(qqq_return_20d)
+
+    stock_return_60d = merged.get("stock_return_60d")
+    qqq_return_60d = merged.get("qqq_return_60d")
+    if stock_return_60d is not None and qqq_return_60d is not None:
+        merged["rel_strength_60d_vs_qqq"] = float(stock_return_60d) - float(qqq_return_60d)
+    return merged
+
+
+def merge_earnings_context(indicators: dict[str, Any], earnings_info: EarningsInfo | None) -> dict[str, Any]:
+    merged = dict(indicators)
+    merged["earnings_data_available"] = earnings_info is not None
+    if earnings_info is None:
+        return merged
+
+    merged["next_earnings_date"] = (
+        earnings_info.next_earnings_date.isoformat() if earnings_info.next_earnings_date is not None else None
+    )
+    merged["days_to_next_earnings"] = earnings_info.days_to_next_earnings
+    merged["days_since_last_earnings"] = earnings_info.days_since_last_earnings
+    return merged
 
 
 def build_indicator_snapshot(indicators: dict[str, Any]) -> dict[str, Any]:

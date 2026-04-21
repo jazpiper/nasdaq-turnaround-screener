@@ -7,6 +7,8 @@ import sys
 import tempfile
 import unittest
 
+import pandas as pd
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from screener.config import get_settings
@@ -138,6 +140,48 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertIn("GOOD", result.bars_by_ticker)
         self.assertEqual(result.failed_tickers["BAD"], "bad symbol")
 
+    def test_yfinance_fetcher_handles_single_ticker_multiindex_columns(self):
+        index = pd.Index([pd.Timestamp("2026-04-20"), pd.Timestamp("2026-04-21")], name="Date")
+        columns = pd.MultiIndex.from_tuples(
+            [
+                ("QQQ", "Open"),
+                ("QQQ", "High"),
+                ("QQQ", "Low"),
+                ("QQQ", "Close"),
+                ("QQQ", "Adj Close"),
+                ("QQQ", "Volume"),
+            ],
+            names=["Ticker", "Price"],
+        )
+        frame = pd.DataFrame(
+            [
+                [500.0, 505.0, 498.0, 504.0, 504.0, 10_000_000],
+                [504.0, 507.0, 503.0, 506.0, 506.0, 11_000_000],
+            ],
+            index=index,
+            columns=columns,
+        )
+
+        class FakeYFinance:
+            @staticmethod
+            def download(**kwargs):
+                return frame
+
+        original_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = FakeYFinance()
+        try:
+            fetcher = YFinanceDailyBarFetcher()
+            result = fetcher.fetch(["QQQ"])
+        finally:
+            if original_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = original_module
+
+        self.assertEqual(result.failed_tickers, {})
+        self.assertEqual(len(result.bars_by_ticker["QQQ"]), 2)
+        self.assertEqual(result.bars_by_ticker["QQQ"][-1].close, 506.0)
+
     def test_load_openclaw_secrets_reads_nested_values(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             secrets_path = Path(tmp_dir) / "secrets.json"
@@ -158,14 +202,14 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(settings.market_data_provider, "twelve-data")
         self.assertEqual(settings.twelve_data_api_key, "env-secret")
 
-    def test_get_settings_uses_openclaw_secrets_when_env_missing(self):
+    def test_get_settings_reads_openclaw_secrets_without_auto_switching_provider(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             secrets_path = Path(tmp_dir) / "secrets.json"
             secrets_path.write_text(json.dumps({"twelveData": {"apiKey": "secret-from-openclaw"}}), encoding="utf-8")
 
             settings = get_settings(openclaw_secrets_path=secrets_path)
 
-        self.assertEqual(settings.market_data_provider, "twelve-data")
+        self.assertEqual(settings.market_data_provider, "yfinance")
         self.assertEqual(settings.twelve_data_api_key, "secret-from-openclaw")
         self.assertEqual(settings.openclaw_secrets_path, secrets_path)
 
@@ -177,7 +221,7 @@ class MarketDataProviderTests(unittest.TestCase):
 
             settings = get_settings(openclaw_secrets_path=secrets_path)
 
-        self.assertEqual(settings.market_data_provider, "twelve-data")
+        self.assertEqual(settings.market_data_provider, "yfinance")
         self.assertEqual(settings.twelve_data_api_key, "env-secret")
 
     def test_get_settings_falls_back_to_yfinance_when_no_twelve_data_key_exists(self):

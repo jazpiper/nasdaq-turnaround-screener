@@ -1,3 +1,9 @@
+from .earnings import (
+    EarningsCalendarProvider,
+    EarningsCalendarProviderError,
+    EarningsInfo,
+    FileBackedEarningsCalendarProvider,
+)
 from .market_data import (
     DailyBar,
     FetchResult,
@@ -11,7 +17,11 @@ from .market_data import (
 
 __all__ = [
     "DailyBar",
+    "EarningsCalendarProvider",
+    "EarningsCalendarProviderError",
+    "EarningsInfo",
     "FetchResult",
+    "FileBackedEarningsCalendarProvider",
     "MarketDataFetcher",
     "MarketDataProviderError",
     "TwelveDataDailyBarFetcher",

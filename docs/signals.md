@@ -89,35 +89,72 @@
 - `weekly_trend_penalty`
 - `weekly_trend_severe_damage`
 - `market_context_score`
+- `qqq_return_20d`
+- `qqq_return_60d`
+- `stock_return_20d`
+- `stock_return_60d`
+- `rel_strength_20d_vs_qqq`
+- `rel_strength_60d_vs_qqq`
+- `relative_strength_score`
 
 현재 구현 로직:
 - severe damage 조건이면 후보에서 제외
 - 약한 훼손이면 penalty만 부여
   - 대략 `3.0` 또는 `6.0` penalty
-- `market_context_score = 10.0 - weekly_trend_penalty`
+- 기본값은 `market_context_score = 10.0 - weekly_trend_penalty`
+- 여기에 QQQ 대비 상대강도를 추가로 반영
+  - `rel_strength_20d_vs_qqq >= 5.0` 이면 가산
+  - `rel_strength_20d_vs_qqq >= 2.0` 이면 소폭 가산
+  - `rel_strength_20d_vs_qqq <= -5.0` 이면 감점 + risk
+  - `rel_strength_60d_vs_qqq >= 4.0` 이면 추가 가산
+  - `rel_strength_60d_vs_qqq <= -8.0` 이면 추가 감점 + risk
 
-대표 risk:
+대표 reason / risk:
+- `최근 20일 기준 QQQ 대비 상대적으로 덜 약함`
+- `시장 대비 상대강도가 개선되는 구간`
+- `최근 20일 기준 시장 대비 상대약세가 큼`
+- `장세 반등 대비 추종력이 약할 수 있음`
 - `주봉 추세가 아직 약해 강한 반전 확인이 더 필요함`
 - `시장/섹터 맥락 확인이 필요함`
 
-## 7. Extra Risk Note
+## 7. Earnings Risk Overlay
+주요 입력:
+- `earnings_data_available`
+- `next_earnings_date`
+- `days_to_next_earnings`
+- `days_since_last_earnings`
+- `earnings_penalty`
+
+현재 구현 로직:
+- earnings 데이터가 없으면 run은 계속 진행
+- `days_to_next_earnings <= 2` 이면 penalty `8`
+- `days_to_next_earnings <= 5` 이면 penalty `4`
+- `days_since_last_earnings <= 2` 이면 penalty `3`
+- penalty는 총점에서 차감하고 risk를 함께 남김
+
+대표 risk:
+- `실적 발표가 임박해 이벤트 리스크가 큼`
+- `실적 발표가 가까워 변동성 리스크가 있음`
+- `실적 발표 직후 변동성 구간일 수 있음`
+
+## 8. Extra Risk Note
 추가로 아래 조건이면 risk를 더 붙입니다.
 - `sma_20 < sma_60`
 
 대표 risk:
 - `중기 추세는 아직 하락 압력일 수 있음`
 
-## 8. Ranking Philosophy
+## 9. Ranking Philosophy
 가장 많이 빠진 종목이 아니라, `과매도 + 저점 형성 + 전환 신호` 조합이 좋은 종목을 우선합니다.
 
-## 9. Not Yet Implemented
+## 10. Not Yet Implemented
 아래는 여전히 검토 아이디어이지만, 현재 scoring/filter 코드에는 직접 들어가 있지 않습니다.
-- earnings proximity penalty
 - sector relative strength
 - ATR 기반 변동성 필터
 - long lower wick / candle pattern 정교화
+- earnings API direct integration
 
-## 10. Human Review Checklist
+## 11. Human Review Checklist
 최종 후보 확인 시 아래를 같이 봅니다.
 - 실적 발표 일정
 - 섹터 뉴스

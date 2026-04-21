@@ -31,7 +31,7 @@ class CandidateResult(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     indicator_snapshot: dict[str, object] | None = None
-    snapshot_schema_version: int = 1
+    snapshot_schema_version: int = 2
     generated_at: datetime
 
 
