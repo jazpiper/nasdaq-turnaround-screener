@@ -8,6 +8,9 @@ pip install -e '.[dev]'
 pytest
 ```
 
+- OpenClaw는 정기 실행과 secret 주입을 맡고, 이 저장소는 batch 실행과 artifact 생성을 맡습니다.
+- 운영 기준 날짜는 항상 `America/New_York` 거래일입니다.
+
 ## 2. Daily Run
 직접 CLI를 써도 되고 runner를 써도 됩니다.
 
@@ -36,6 +39,7 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --ski
 - 기본 장중 cadence는 `open-1`, `open-2`, `midday-1`, `midday-2`, `power-hour-1`, `power-hour-2` 의 6개 window입니다.
 - collector는 NASDAQ-100 universe를 window별로 고정 분할하고, 분당 최대 8건 기준으로 보수적으로 수집합니다.
 - 실제 artifact는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 기록됩니다.
+- `scripts/run_intraday_window.py` 는 OpenClaw/cron wrapper이고, 실제 수집은 내부에서 `collect-window` CLI를 호출합니다.
 
 ## 4. Backtest
 ```bash
@@ -67,11 +71,31 @@ python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
 ## 7. OpenClaw Usage
-- 이 저장소는 cron 스케줄을 직접 만들지 않습니다.
-- OpenClaw는 장중에는 window별 intraday runner를, 장 마감 후에는 daily runner를 호출하면 됩니다.
-- OpenClaw는 최종적으로 `output/daily/latest/` 또는 특정 날짜 디렉터리를 읽어 요약을 생성합니다.
+- 이 저장소는 cron 정의를 포함하지 않습니다. OpenClaw가 외부에서 명령을 호출하는 전제를 둡니다.
+- 장중 수집은 `python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
+- 장 마감 후 daily run은 `python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
+- Oracle을 쓰는 환경이면 bootstrap 단계에서 `python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
+- OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/` 입니다.
+- intraday artifact는 daily run 보강용이므로, 기본적으로 OpenClaw가 직접 읽을 필요는 없습니다.
 
-## 8. Exit and Failure Handling
+## 8. OpenClaw Command Template
+`SCREENER_INTRADAY_COLLECTOR_COMMAND` 를 쓰면 wrapper가 아래 placeholder를 치환합니다.
+
+- `{python}`
+- `{date}`
+- `{window_id}`
+- `{window_index}`
+- `{output_dir}`
+- `{output_root}`
+- `{project_root}`
+
+기본 template는 아래와 같습니다.
+
+```bash
+{python} -m screener.cli.main collect-window --date {date} --window-index {window_index} --output-dir {output_root}
+```
+
+## 9. Exit and Failure Handling
 - 일부 ticker fetch 실패는 metadata에 남기고 run 전체는 계속 진행합니다.
 - Oracle SQL credential 누락이나 persistence 실패는 non-zero exit로 올립니다.
 - 운영에서는 non-zero exit를 그대로 retry / alert 판단에 사용하면 됩니다.

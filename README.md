@@ -66,4 +66,4 @@ docs/             current-state documentation
 ## Documentation
 - `docs/architecture.md`: 현재 구현된 시스템 구조, 데이터 흐름, 저장 방식
 - `docs/signals.md`: 현재 코드 기준 필터, 점수화, penalty 규칙
-- `docs/operations.md`: 실행 명령, 환경변수, NY trading day 기준 운영 흐름
+- `docs/operations.md`: 실행 명령, OpenClaw 연동 방식, NY trading day 기준 운영 흐름

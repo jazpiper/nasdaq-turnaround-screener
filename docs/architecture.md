@@ -88,4 +88,5 @@ CLI
 ## 7. OpenClaw Role
 - 이 저장소는 데이터 처리와 artifact 생성을 담당합니다.
 - OpenClaw는 실행 orchestration, secret 주입, 결과 요약과 전달을 담당합니다.
+- 운영 명령은 `scripts/run_daily.py`, `scripts/run_intraday_window.py` wrapper 기준으로 맞추는 편이 안전합니다.
 - 운영 기준 command와 환경변수는 `docs/operations.md`, 현재 규칙은 `docs/signals.md`를 기준으로 봅니다.

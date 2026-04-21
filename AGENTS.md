@@ -1,10 +1,10 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/screener/` contains the application package. `cli/main.py` is the Typer entrypoint, `pipeline.py` orchestrates daily runs, and domain code is split across `data/`, `indicators/`, `scoring/`, `reporting/`, `storage/`, `universe/`, and `models/`.
+- `src/screener/` contains the application package. `cli/main.py` is the Typer entrypoint, `pipeline.py` is the public facade, `_pipeline/` holds internal daily-run modules, and domain code is split across `data/`, `indicators/`, `scoring/`, `reporting/`, `storage/`, `universe/`, and `models/`.
 - `scripts/run_daily.py` and `scripts/run_intraday_window.py` are cron-friendly wrappers around the CLI.
 - `tests/` covers CLI, pipeline, storage, indicators, and provider behavior.
-- `docs/` contains product, architecture, operations, and signal design notes. Artifacts belong under `output/`.
+- `docs/` contains the current-state docs: architecture, operations, and signals. Artifacts belong under `output/`.
 
 ## Build, Test, and Development Commands
 - `python -m venv .venv && . .venv/bin/activate` creates and activates a Python environment.
@@ -12,6 +12,8 @@
 - `python -m screener.cli.main run --date 2026-04-21 --dry-run` runs the daily screener without writing artifacts.
 - `python scripts/run_daily.py --date 2026-04-21` runs the daily wrapper and updates `output/daily/latest`.
 - `python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0` executes an intraday collection window.
+- `python -m screener.cli.main init-oracle-schema` initializes Oracle tables before persistence is enabled.
+- `python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21` replays historical candidate generation and writes forward-return artifacts.
 - `pytest` runs the full suite; use `pytest tests/test_cli.py -q` for targeted iteration.
 
 ## Coding Style & Naming Conventions
@@ -32,5 +34,5 @@
 
 ## Security & Configuration Tips
 - Never commit API keys, Oracle credentials, or local secret files.
-- Use `TWELVE_DATA_API_KEY` and `ORACLE_DB_*`, or the OpenClaw secrets integration described in `README.md`.
+- Use `TWELVE_DATA_API_KEY` and `ORACLE_DB_*`, or the OpenClaw secrets integration described in `docs/operations.md`.
 - Treat `output/` as generated data; regenerate artifacts instead of editing them manually.
