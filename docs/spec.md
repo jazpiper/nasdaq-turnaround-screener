@@ -78,6 +78,10 @@
 - risks[]
 - generated_at
 
+Optional persistence/debug fields:
+- `indicator_snapshot` (rule 판단에 사용한 final feature snapshot)
+- `snapshot_schema_version`
+
 ### 5.3 JSON Example
 ```json
 {

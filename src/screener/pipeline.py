@@ -25,6 +25,31 @@ from screener.scoring import rank_candidates
 from screener.storage.files import ensure_directory, write_json, write_text
 from screener.universe import load_static_universe
 
+INDICATOR_SNAPSHOT_SCHEMA_VERSION = 1
+INDICATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
+    "close",
+    "low",
+    "bb_lower",
+    "rsi_14",
+    "sma_5",
+    "sma_20",
+    "sma_60",
+    "distance_to_20d_low",
+    "distance_to_60d_low",
+    "average_volume_20d",
+    "volume_ratio_20d",
+    "close_improvement_streak",
+    "rsi_3d_change",
+    "market_context_score",
+    "weekly_bars_available",
+    "weekly_close",
+    "weekly_sma_5",
+    "weekly_sma_10",
+    "weekly_close_improving",
+    "weekly_trend_penalty",
+    "weekly_trend_severe_damage",
+)
+
 
 @runtime_checkable
 class UniverseProvider(Protocol):
@@ -218,6 +243,8 @@ class RankedCandidateScorer:
             distance_to_20d_low=_maybe_float(candidate.snapshot.get("distance_to_20d_low")),
             reasons=candidate.reasons,
             risks=candidate.risks,
+            indicator_snapshot=build_indicator_snapshot(candidate.snapshot),
+            snapshot_schema_version=INDICATOR_SNAPSHOT_SCHEMA_VERSION,
             generated_at=context.generated_at,
         )
 
@@ -336,8 +363,35 @@ def _latest_change(values: list[float | None], periods: int) -> float:
     return valid[-1] - valid[-1 - periods]
 
 
+def build_indicator_snapshot(indicators: dict[str, Any]) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {"schema_version": INDICATOR_SNAPSHOT_SCHEMA_VERSION}
+    for key in INDICATOR_SNAPSHOT_KEYS:
+        if key not in indicators:
+            continue
+        value = _snapshot_value(indicators[key])
+        if value is not None:
+            snapshot[key] = value
+    return snapshot
+
+
 def _maybe_float(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _snapshot_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "item") and callable(value.item):
+        value = value.item()
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    if isinstance(value, str):
+        return value
+    return str(value)
 
 
 def build_context(run_date, generated_at: datetime | None = None, dry_run: bool = False, output_dir: Path | str = Path("output"), run_mode: str = "daily", universe_name: str = "NASDAQ-100") -> PipelineContext:

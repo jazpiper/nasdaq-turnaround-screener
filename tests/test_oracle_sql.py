@@ -64,6 +64,13 @@ def make_screen_result(tmp_path: Path) -> ScreenRunResult:
                 distance_to_20d_low=1.8,
                 reasons=["BB 하단 근처 또는 재진입 구간"],
                 risks=["중기 추세는 아직 하락 압력일 수 있음"],
+                indicator_snapshot={
+                    "schema_version": 1,
+                    "sma_5": 173.1,
+                    "volume_ratio_20d": 1.2,
+                    "weekly_trend_penalty": 0.0,
+                },
+                snapshot_schema_version=1,
                 generated_at=datetime(2026, 4, 21, 7, 30, tzinfo=timezone.utc),
             )
         ],
@@ -142,7 +149,11 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     assert connection.closed is True
     assert any("CREATE TABLE screen_runs" in statement for statement, _ in connection.statements)
     assert any("INSERT INTO screen_runs" in statement for statement, _ in connection.statements)
-    assert any("INSERT INTO screen_candidates" in statement for statement, _ in connection.statements)
+    assert any("ALTER TABLE screen_candidates ADD ( indicator_snapshot_json CLOB )" in statement for statement, _ in connection.statements)
+    candidate_insert = next(parameters for statement, parameters in connection.statements if "INSERT INTO screen_candidates" in statement)
+    assert candidate_insert is not None
+    assert "volume_ratio_20d" in candidate_insert["indicator_snapshot_json"]
+    assert candidate_insert["snapshot_schema_version"] == 1
     assert any("INSERT INTO candidate_subscores" in statement for statement, _ in connection.statements)
 
 

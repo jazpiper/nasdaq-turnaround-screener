@@ -128,6 +128,8 @@ class OracleSqlStorage:
                             distance_to_20d_low,
                             reasons_json,
                             risks_json,
+                            indicator_snapshot_json,
+                            snapshot_schema_version,
                             generated_at
                         ) VALUES (
                             :candidate_id,
@@ -140,6 +142,8 @@ class OracleSqlStorage:
                             :distance_to_20d_low,
                             :reasons_json,
                             :risks_json,
+                            :indicator_snapshot_json,
+                            :snapshot_schema_version,
                             :generated_at
                         )
                         """,
@@ -154,6 +158,8 @@ class OracleSqlStorage:
                             "distance_to_20d_low": candidate.distance_to_20d_low,
                             "reasons_json": _json(candidate.reasons),
                             "risks_json": _json(candidate.risks),
+                            "indicator_snapshot_json": _json(candidate.indicator_snapshot) if candidate.indicator_snapshot is not None else None,
+                            "snapshot_schema_version": candidate.snapshot_schema_version,
                             "generated_at": candidate.generated_at,
                         },
                     )
@@ -370,6 +376,8 @@ _SCHEMA_STATEMENTS = (
           distance_to_20d_low NUMBER,
           reasons_json CLOB,
           risks_json CLOB,
+          indicator_snapshot_json CLOB,
+          snapshot_schema_version NUMBER DEFAULT 1 NOT NULL,
           generated_at TIMESTAMP WITH TIME ZONE NOT NULL,
           created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
           CONSTRAINT fk_screen_candidates_run
@@ -378,6 +386,28 @@ _SCHEMA_STATEMENTS = (
     EXCEPTION
       WHEN OTHERS THEN
         IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+      EXECUTE IMMEDIATE '
+        ALTER TABLE screen_candidates ADD (
+          indicator_snapshot_json CLOB
+        )';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+      EXECUTE IMMEDIATE '
+        ALTER TABLE screen_candidates ADD (
+          snapshot_schema_version NUMBER DEFAULT 1 NOT NULL
+        )';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF SQLCODE != -1430 THEN RAISE; END IF;
     END;
     """,
     """

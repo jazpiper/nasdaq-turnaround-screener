@@ -116,6 +116,11 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
 
     assert result.candidate_count >= 1
     assert any(candidate.ticker == "AAPL" for candidate in result.candidates)
+    candidate = next(candidate for candidate in result.candidates if candidate.ticker == "AAPL")
+    assert candidate.indicator_snapshot is not None
+    assert candidate.indicator_snapshot["schema_version"] == 1
+    assert "volume_ratio_20d" in candidate.indicator_snapshot
+    assert "weekly_trend_penalty" in candidate.indicator_snapshot
     assert result.metadata.data_failures == ["NVDA: No price rows returned"]
     assert artifacts.markdown_path == tmp_path / "daily-report.md"
     assert artifacts.json_report_path == tmp_path / "daily-report.json"

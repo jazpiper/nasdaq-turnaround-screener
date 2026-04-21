@@ -16,11 +16,13 @@
 - 장점:
   - daily candidate history 조회 용이
   - score 추세 비교 용이
+  - 운영/설명용 decision snapshot 추적 가능
   - backtest/분석 쿼리에 강함
 - 추천 저장 대상:
   - run metadata
   - daily candidates
   - factor subscores
+  - candidate-level indicator snapshots
   - watchlist snapshots
 
 ### C. Oracle Mongo API
@@ -47,6 +49,8 @@
 - `screen_candidates`
 - `candidate_subscores`
 - `universe_snapshots`
+
+`screen_candidates`에는 relational column 외에 `indicator_snapshot_json` 같은 설명/디버그용 feature snapshot을 함께 둘 수 있습니다. 이 snapshot은 백테스트용 full warehouse가 아니라, 왜 해당 candidate가 선택되었는지 추적하기 위한 decision snapshot으로 봅니다.
 
 ## 4. Example Mongo Collections
 - `daily_reports`
