@@ -6,6 +6,8 @@ from pathlib import Path
 
 from screener.secrets import default_openclaw_secrets_path, load_openclaw_secrets
 
+DEFAULT_TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series"
+
 
 @dataclass(slots=True)
 class Settings:
@@ -18,7 +20,7 @@ class Settings:
     default_run_mode: str = "daily"
     market_data_provider: str = "yfinance"
     twelve_data_api_key: str | None = None
-    twelve_data_base_url: str = "https://api.twelvedata.com/time_series"
+    twelve_data_base_url: str = DEFAULT_TWELVE_DATA_BASE_URL
     openclaw_secrets_path: Path = default_openclaw_secrets_path()
     default_notes: list[str] = field(
         default_factory=lambda: [
@@ -41,7 +43,7 @@ def get_settings(
     settings = Settings(
         market_data_provider=resolved_market_data_provider,
         twelve_data_api_key=resolved_twelve_data_api_key,
-        twelve_data_base_url=os.getenv("TWELVE_DATA_BASE_URL", Settings.twelve_data_base_url),
+        twelve_data_base_url=os.getenv("TWELVE_DATA_BASE_URL", DEFAULT_TWELVE_DATA_BASE_URL),
         openclaw_secrets_path=resolved_secrets_path,
     )
     if output_dir is not None:

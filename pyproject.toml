@@ -28,5 +28,5 @@ screener = "screener.cli.main:app"
 packages = ["src/screener"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
