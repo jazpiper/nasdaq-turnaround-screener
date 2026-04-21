@@ -57,12 +57,17 @@ nasdaq-turnaround-screener/
 
 ## Current Scaffold
 ```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e '.[dev]'
 python -m screener.cli.main run --date 2026-04-21 --dry-run
 python -m screener.cli.main run --date 2026-04-21
+python scripts/run_daily.py --date 2026-04-21
 pytest
 ```
 
 현재 CLI는 placeholder pipeline을 실행하고, dry-run이 아니면 `output/` 아래에 markdown/json metadata artifact를 생성합니다.
+일상 운영에서는 `scripts/run_daily.py` 를 사용하면 `.venv`를 자동으로 준비하고, 결과를 `output/daily/YYYY-MM-DD/` 아래에 저장한 뒤 `output/daily/latest` 포인터를 갱신합니다.
 구체적인 universe, market data, indicator, scoring 구현은 분리된 interface를 통해 이후 병합하도록 남겨두었습니다.
 
 ## Market Data Providers
