@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping, Protocol
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,14 @@ class MarketDataFetcher(Protocol):
 
 
 def _read_url(url: str) -> str:
-    with urlopen(url) as response:  # pragma: no cover, exercised via injected reader in tests
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; nasdaq-turnaround-screener/0.1)",
+            "Accept": "application/json,text/plain,*/*",
+        },
+    )
+    with urlopen(request) as response:  # pragma: no cover, exercised via injected reader in tests
         return response.read().decode("utf-8")
 
 
