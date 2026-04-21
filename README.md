@@ -63,27 +63,34 @@ python -m venv .venv
 pip install -e '.[dev]'
 python -m screener.cli.main run --date 2026-04-21 --dry-run
 python -m screener.cli.main run --date 2026-04-21
+python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
 python scripts/run_daily.py --date 2026-04-21
 pytest
 ```
 
-현재 CLI는 placeholder pipeline을 실행하고, dry-run이 아니면 `output/` 아래에 markdown/json metadata artifact를 생성합니다.
-일상 운영에서는 `scripts/run_intraday_window.py` 로 장중 수집 window 하나를 깨끗하게 호출하고, `scripts/run_daily.py` 로 하루 마감 스크리닝을 수행합니다.
-장중 runner는 collector 자체를 다시 구현하지 않고, 설정된 collector command template에 `date`, `window_id`, `output_dir` 를 주입하는 얇은 wrapper입니다.
-일봉 runner는 `.venv`를 자동으로 준비하고, 결과를 `output/daily/YYYY-MM-DD/` 아래에 저장한 뒤 `output/daily/latest` 포인터를 갱신합니다.
-구체적인 universe, market data, indicator, scoring 구현은 분리된 interface를 통해 이후 병합하도록 남겨두었습니다.
+현재 CLI는 daily screening과 staged intraday collection 둘 다 지원합니다.
+일상 운영에서는 `python -m screener.cli.main collect-window ...` 또는 `scripts/run_intraday_window.py` 로 장중 수집 window 하나를 실행하고, `scripts/run_daily.py` 로 하루 마감 스크리닝을 수행합니다.
+장중 runner는 collector command를 감싸는 얇은 wrapper이고, 일봉 runner는 `.venv`를 자동으로 준비한 뒤 결과를 `output/daily/YYYY-MM-DD/` 아래에 저장하고 `output/daily/latest` 포인터를 갱신합니다.
 
 ## Market Data Providers
 - 기본적으로는 `yfinance` 를 사용합니다.
 - `TWELVE_DATA_API_KEY` 가 있거나 OpenClaw local secrets 파일(`~/.openclaw/secrets.json`, override: `SCREENER_OPENCLAW_SECRETS_PATH`)에 `/twelveData/apiKey` 가 있으면 기본 provider가 자동으로 `twelve-data` 로 전환됩니다.
 - `SCREENER_MARKET_DATA_PROVIDER=twelve-data` 또는 `yfinance` 로 명시하면 자동 선택보다 우선합니다.
 - Twelve Data API key는 `TWELVE_DATA_API_KEY` 환경변수가 OpenClaw secrets보다 우선합니다.
+- Twelve Data는 연결 자체는 되지만 free plan이 `8 credits/min` 이라, 전체 NASDAQ-100 daily screening의 기본 provider로 쓰기보다는 staged collection 용도로 다루는 편이 안전합니다.
 
 ## Intraday Operations Plan
 - 기본 장중 수집 cadence는 `open-1`, `open-2`, `midday-1`, `midday-2`, `power-hour-1`, `power-hour-2` 의 6개 window입니다.
 - 8회보다 6회를 기본값으로 둔 이유는 API quota, 재시도 여지, 장애 복구 단순성, 그리고 daily screener가 결국 종가 기준 판단을 한다는 점 때문입니다.
+- `collect-window` 명령은 NASDAQ-100 정적 universe를 6개 window로 고정 분할하고, 각 window 내부에서는 ticker 요청을 분당 최대 8건 이하의 minute batch로 보수적으로 진행합니다.
+- 결과는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 저장되며, metadata에는 성공/실패, minute batch, remaining ticker, 이번 window에서 미수집된 ticker가 함께 기록됩니다.
 - 실무 흐름은 장중 collector가 staged snapshots를 쌓고, 장 마감 후 daily screener가 최종 후보/리포트를 생성하는 2단 구조입니다.
+- 예시:
+  ```bash
+  python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
+  python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
+  ```
 - window 목록은 `SCREENER_INTRADAY_WINDOW_IDS`, output root는 `SCREENER_INTRADAY_OUTPUT_ROOT`, collector command는 `SCREENER_INTRADAY_COLLECTOR_COMMAND` 로 override 할 수 있습니다.
 
 ## Future Extensions

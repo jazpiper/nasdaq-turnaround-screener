@@ -78,6 +78,43 @@ def test_run_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert not any(tmp_path.iterdir())
 
 
+class StubCollector:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def run_window(self, *, run_date, output_root, window_index, total_windows, max_credits_per_minute, dry_run):
+        run_directory = output_root / run_date.isoformat() / "window-01-of-06" / "run-20260421T073000Z"
+        metadata_path = run_directory / "collection-metadata.json"
+        quotes_path = run_directory / "collected-quotes.json"
+        if not dry_run:
+            run_directory.mkdir(parents=True, exist_ok=True)
+            metadata_path.write_text(json.dumps({"window_index": window_index, "remaining_count": 83}), encoding="utf-8")
+            quotes_path.write_text(json.dumps({"quotes": [{"ticker": "AAPL"}]}), encoding="utf-8")
+        else:
+            run_directory = metadata_path = quotes_path = None
+
+        class Plan:
+            window_index = 0
+            total_windows = 6
+            window_tickers = ["AAPL"] * 17
+            remaining_tickers = ["MSFT"] * 83
+
+        class Artifacts:
+            def __init__(self):
+                self.run_directory = run_directory
+                self.metadata_path = metadata_path
+                self.quotes_path = quotes_path
+
+        class Result:
+            def __init__(self):
+                self.plan = Plan()
+                self.collected = [{"ticker": "AAPL"}]
+                self.failures = {}
+                self.artifacts = Artifacts()
+
+        return Result()
+
+
 def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("screener.cli.main.ScreenPipeline", StubPipeline)
 
@@ -101,3 +138,30 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert payload["date"] == "2026-04-21"
     assert payload["candidate_count"] == 1
     assert payload["candidates"][0]["ticker"] == "AAPL"
+
+
+def test_collect_window_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", StubCollector)
+
+    result = runner.invoke(
+        app,
+        ["collect-window", "--date", "2026-04-21", "--window-index", "0", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Window: 1/6" in result.stdout
+    assert "Remaining after window: 83" in result.stdout
+    assert (tmp_path / "2026-04-21" / "window-01-of-06" / "run-20260421T073000Z" / "collection-metadata.json").exists()
+
+
+def test_collect_window_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", StubCollector)
+
+    result = runner.invoke(
+        app,
+        ["collect-window", "--date", "2026-04-21", "--window-index", "0", "--dry-run", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Artifacts skipped" in result.stdout
+    assert not any(tmp_path.iterdir())
