@@ -63,6 +63,33 @@ def bollinger_bands(closes: Iterable[float], window: int = 20, num_stddev: float
     return {"middle": mid, "upper": upper, "lower": lower}
 
 
+def true_range(highs: Iterable[float], lows: Iterable[float], closes: Iterable[float]) -> list[float]:
+    high_values = [float(value) for value in highs]
+    low_values = [float(value) for value in lows]
+    close_values = [float(value) for value in closes]
+    result: list[float] = []
+    previous_close: float | None = None
+
+    for high, low, close in zip(high_values, low_values, close_values):
+        intraday_range = high - low
+        if previous_close is None:
+            result.append(intraday_range)
+        else:
+            result.append(max(intraday_range, abs(high - previous_close), abs(low - previous_close)))
+        previous_close = close
+
+    return result
+
+
+def average_true_range(
+    highs: Iterable[float],
+    lows: Iterable[float],
+    closes: Iterable[float],
+    window: int = 14,
+) -> list[float | None]:
+    return rolling_mean(true_range(highs, lows, closes), window)
+
+
 def rsi(closes: Iterable[float], window: int = 14) -> list[float | None]:
     close_values = [float(value) for value in closes]
     if not close_values:
@@ -191,8 +218,11 @@ def latest_weekly_context(bars: Iterable[DailyBar]) -> dict[str, float | int | b
 def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | str | None]]:
     rows = sorted(bars, key=lambda bar: bar.trading_date)
     closes = [bar.close for bar in rows]
+    highs = [bar.high for bar in rows]
+    lows = [bar.low for bar in rows]
     volumes = [bar.volume for bar in rows]
     bb = bollinger_bands(closes, window=20, num_stddev=2.0)
+    atr14 = average_true_range(highs, lows, closes, window=14)
     sma5 = rolling_mean(closes, 5)
     sma20 = rolling_mean(closes, 20)
     sma60 = rolling_mean(closes, 60)
@@ -200,6 +230,12 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
     dist20 = distance_from_recent_low(closes, 20)
     dist60 = distance_from_recent_low(closes, 60)
     vol_ratio = volume_ratio(volumes, 20)
+    atr14_pct = [None if atr is None or close == 0 else (atr / close) * 100.0 for atr, close in zip(atr14, closes)]
+    daily_range_pct = [None if close == 0 else ((high - low) / close) * 100.0 for high, low, close in zip(highs, lows, closes)]
+    bb_width_pct = [
+        None if upper is None or lower is None or close == 0 else ((upper - lower) / close) * 100.0
+        for upper, lower, close in zip(bb["upper"], bb["lower"], closes)
+    ]
 
     enriched: list[dict[str, float | str | None]] = []
     for index, bar in enumerate(rows):
@@ -219,6 +255,10 @@ def add_indicator_columns(bars: Iterable[DailyBar]) -> list[dict[str, float | st
                 "bb_middle": bb["middle"][index],
                 "bb_upper": bb["upper"][index],
                 "bb_lower": bb["lower"][index],
+                "atr_14": atr14[index],
+                "atr_14_pct": atr14_pct[index],
+                "daily_range_pct": daily_range_pct[index],
+                "bb_width_pct": bb_width_pct[index],
                 "rsi_14": rsi14[index],
                 "distance_to_20d_low": dist20[index],
                 "distance_to_60d_low": dist60[index],

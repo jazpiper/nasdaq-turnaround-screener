@@ -64,3 +64,37 @@ def test_score_candidate_applies_earnings_penalty_and_risk() -> None:
     assert candidate.snapshot["earnings_penalty"] == 8
     assert "실적 발표가 임박해 이벤트 리스크가 큼" in candidate.risks
     assert candidate.score < sum(candidate.subscores.values())
+
+
+def test_score_candidate_applies_volatility_penalty_and_risks() -> None:
+    candidate = score_candidate(
+        {
+            "ticker": "AAPL",
+            "bars_available": 90,
+            "average_volume_20d": 2_000_000,
+            "close": 100.0,
+            "low": 98.0,
+            "bb_lower": 99.0,
+            "rsi_14": 30.0,
+            "distance_to_20d_low": 1.0,
+            "distance_to_60d_low": 4.0,
+            "sma_5": 99.5,
+            "sma_20": 101.0,
+            "sma_60": 100.0,
+            "volume_ratio_20d": 1.0,
+            "close_improvement_streak": 2,
+            "rsi_3d_change": 2.0,
+            "market_context_score": 10.0,
+            "weekly_trend_penalty": 0.0,
+            "weekly_trend_severe_damage": False,
+            "atr_14_pct": 6.4,
+            "daily_range_pct": 7.2,
+            "bb_width_pct": 26.0,
+        }
+    )
+
+    assert candidate.snapshot["volatility_penalty"] == 4
+    assert "변동성이 아직 높아 바닥 확인이 이를 수 있음" in candidate.risks
+    assert "일중 range가 커서 신호 품질이 불안정함" in candidate.risks
+    assert "볼린저 밴드 폭이 넓어 아직 구조가 불안정함" in candidate.risks
+    assert candidate.score == sum(candidate.subscores.values()) - 4

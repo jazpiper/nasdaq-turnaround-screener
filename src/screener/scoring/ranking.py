@@ -186,6 +186,40 @@ def _apply_earnings_penalty(snapshot: dict[str, Any], risks: list[str]) -> int:
     return penalty
 
 
+def _apply_volatility_penalty(snapshot: dict[str, Any], reasons: list[str], risks: list[str]) -> int:
+    penalty = 0
+    calm_signals = 0
+
+    atr_14_pct = _as_float(snapshot, "atr_14_pct")
+    if atr_14_pct is not None:
+        if atr_14_pct >= 6.0:
+            penalty = max(penalty, 4)
+            risks.append("변동성이 아직 높아 바닥 확인이 이를 수 있음")
+        elif atr_14_pct <= 3.5:
+            calm_signals += 1
+
+    daily_range_pct = _as_float(snapshot, "daily_range_pct")
+    if daily_range_pct is not None:
+        if daily_range_pct >= 7.0:
+            penalty = max(penalty, 2)
+            risks.append("일중 range가 커서 신호 품질이 불안정함")
+        elif daily_range_pct <= 4.5:
+            calm_signals += 1
+
+    bb_width_pct = _as_float(snapshot, "bb_width_pct")
+    if bb_width_pct is not None:
+        if bb_width_pct >= 25.0:
+            penalty = max(penalty, 3)
+            risks.append("볼린저 밴드 폭이 넓어 아직 구조가 불안정함")
+        elif bb_width_pct <= 18.0:
+            calm_signals += 1
+
+    if penalty == 0 and calm_signals == 3:
+        reasons.append("변동성 과열 없이 반등 시도가 나타남")
+
+    return penalty
+
+
 def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
     working_snapshot = dict(snapshot)
     reasons: list[str] = []
@@ -198,8 +232,10 @@ def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
         "market_context": _score_market_context(working_snapshot, reasons, risks),
     }
     earnings_penalty = _apply_earnings_penalty(working_snapshot, risks)
+    volatility_penalty = _apply_volatility_penalty(working_snapshot, reasons, risks)
     working_snapshot["earnings_penalty"] = earnings_penalty
-    score = max(sum(subscores.values()) - earnings_penalty, 0)
+    working_snapshot["volatility_penalty"] = volatility_penalty
+    score = max(sum(subscores.values()) - earnings_penalty - volatility_penalty, 0)
     if (_as_float(working_snapshot, "sma_20") or 0.0) < (_as_float(working_snapshot, "sma_60") or 0.0):
         risks.append("중기 추세는 아직 하락 압력일 수 있음")
     return ScreenCandidate(

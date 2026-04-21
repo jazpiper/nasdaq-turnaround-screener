@@ -68,6 +68,9 @@ def make_screen_result(tmp_path: Path) -> ScreenRunResult:
                     "schema_version": 2,
                     "earnings_data_available": False,
                     "sma_5": 173.1,
+                    "atr_14_pct": 2.8,
+                    "bb_width_pct": 11.5,
+                    "volatility_penalty": 0,
                     "volume_ratio_20d": 1.2,
                     "weekly_trend_penalty": 0.0,
                 },
@@ -154,6 +157,7 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     candidate_insert = next(parameters for statement, parameters in connection.statements if "INSERT INTO screen_candidates" in statement)
     assert candidate_insert is not None
     assert "volume_ratio_20d" in candidate_insert["indicator_snapshot_json"]
+    assert "volatility_penalty" in candidate_insert["indicator_snapshot_json"]
     assert candidate_insert["snapshot_schema_version"] == 2
     assert any("INSERT INTO candidate_subscores" in statement for statement, _ in connection.statements)
 

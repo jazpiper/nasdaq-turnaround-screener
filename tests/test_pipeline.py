@@ -142,6 +142,11 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert candidate.indicator_snapshot["earnings_data_available"] is True
     assert candidate.indicator_snapshot["days_to_next_earnings"] == 2
     assert candidate.indicator_snapshot["earnings_penalty"] == 8
+    assert candidate.indicator_snapshot["volatility_penalty"] == 0
+    assert "atr_14" in candidate.indicator_snapshot
+    assert "atr_14_pct" in candidate.indicator_snapshot
+    assert "daily_range_pct" in candidate.indicator_snapshot
+    assert "bb_width_pct" in candidate.indicator_snapshot
     assert "rel_strength_20d_vs_qqq" in candidate.indicator_snapshot
     assert "relative_strength_score" in candidate.indicator_snapshot
     assert "volume_ratio_20d" in candidate.indicator_snapshot
@@ -214,6 +219,22 @@ def test_indicator_engine_includes_weekly_context_and_penalty() -> None:
     assert indicators["weekly_bars_available"] >= 10
     assert indicators["weekly_sma_10"] is not None
     assert indicators["weekly_trend_penalty"] >= 3.0
+
+
+def test_indicator_engine_includes_volatility_metrics() -> None:
+    history = make_history(start_close=180.0, days=90)
+    indicators = TechnicalIndicatorEngine().compute(
+        history,
+        TickerInput(ticker="AAPL"),
+        build_context(run_date=date(2026, 4, 21), dry_run=True),
+    )
+
+    assert indicators["atr_14"] is not None
+    assert indicators["atr_14_pct"] is not None
+    assert indicators["daily_range_pct"] is not None
+    assert indicators["bb_width_pct"] is not None
+    assert indicators["atr_14_pct"] > 0
+    assert indicators["daily_range_pct"] > 0
 
 
 def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path: Path) -> None:

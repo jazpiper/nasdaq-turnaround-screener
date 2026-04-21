@@ -137,24 +137,47 @@
 - `실적 발표가 가까워 변동성 리스크가 있음`
 - `실적 발표 직후 변동성 구간일 수 있음`
 
-## 8. Extra Risk Note
+## 8. Volatility Normalization Overlay
+주요 입력:
+- `atr_14`
+- `atr_14_pct`
+- `daily_range_pct`
+- `bb_width_pct`
+- `volatility_penalty`
+
+현재 구현 로직:
+- `atr_14_pct >= 6.0` 이면 penalty `4`
+- `daily_range_pct >= 7.0` 이면 instability risk 추가
+- `bb_width_pct >= 25.0` 이면 구조 불안정 risk 추가
+- penalty는 총점에서 차감하고 snapshot에 `volatility_penalty` 로 남김
+- 반대로 아래 3개가 모두 안정적이면 reason을 추가
+  - `atr_14_pct <= 3.5`
+  - `daily_range_pct <= 4.5`
+  - `bb_width_pct <= 18.0`
+
+대표 reason / risk:
+- `변동성 과열 없이 반등 시도가 나타남`
+- `변동성이 아직 높아 바닥 확인이 이를 수 있음`
+- `일중 range가 커서 신호 품질이 불안정함`
+- `볼린저 밴드 폭이 넓어 아직 구조가 불안정함`
+
+## 9. Extra Risk Note
 추가로 아래 조건이면 risk를 더 붙입니다.
 - `sma_20 < sma_60`
 
 대표 risk:
 - `중기 추세는 아직 하락 압력일 수 있음`
 
-## 9. Ranking Philosophy
+## 10. Ranking Philosophy
 가장 많이 빠진 종목이 아니라, `과매도 + 저점 형성 + 전환 신호` 조합이 좋은 종목을 우선합니다.
 
-## 10. Not Yet Implemented
+## 11. Not Yet Implemented
 아래는 여전히 검토 아이디어이지만, 현재 scoring/filter 코드에는 직접 들어가 있지 않습니다.
 - sector relative strength
-- ATR 기반 변동성 필터
 - long lower wick / candle pattern 정교화
 - earnings API direct integration
 
-## 11. Human Review Checklist
+## 12. Human Review Checklist
 최종 후보 확인 시 아래를 같이 봅니다.
 - 실적 발표 일정
 - 섹터 뉴스
