@@ -98,6 +98,8 @@ def test_default_collector_template_runs_full_universe_with_more_conservative_ra
     )
 
     assert command == [
+        "env",
+        "PYTHONPATH=/tmp/project/src",
         "/tmp/project/.venv/bin/python",
         "-m",
         "screener.cli.main",

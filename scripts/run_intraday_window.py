@@ -8,8 +8,10 @@ from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+for path in (SRC_ROOT, PROJECT_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from screener.config import get_settings
 from screener.intraday_ops import DEFAULT_COLLECTOR_COMMAND_TEMPLATE, IntradayPlan, build_collector_command, intraday_output_dir

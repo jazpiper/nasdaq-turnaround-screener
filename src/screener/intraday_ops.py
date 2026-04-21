@@ -13,7 +13,7 @@ DEFAULT_INTRADAY_WINDOW_IDS: tuple[str, ...] = (
     "power-hour-2",
 )
 DEFAULT_COLLECTOR_COMMAND_TEMPLATE = (
-    "{python} -m screener.cli.main collect-window "
+    "env PYTHONPATH={project_root}/src {python} -m screener.cli.main collect-window "
     "--date {date} --window-index 0 --total-windows 1 --max-credits-per-minute 5 --output-dir {output_root}"
 )
 
