@@ -31,9 +31,10 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         return "\n".join(lines) + "\n"
 
     for candidate in result.candidates:
+        heading = candidate.ticker if not candidate.name else f"{candidate.ticker} ({candidate.name})"
         lines.extend(
             [
-                f"### {candidate.ticker}",
+                f"### {heading}",
                 f"- score: {candidate.score}",
                 f"- reasons: {', '.join(candidate.reasons) if candidate.reasons else 'n/a'}",
                 f"- risks: {', '.join(candidate.risks) if candidate.risks else 'n/a'}",

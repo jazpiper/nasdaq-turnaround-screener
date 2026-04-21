@@ -16,6 +16,7 @@ from screener.indicators.technicals import add_indicator_columns, latest_weekly_
 from screener.intraday_artifacts import discover_latest_intraday_snapshot, merge_history_with_staged_quote
 from screener.models import PipelineContext, TickerInput
 from screener.universe import load_static_universe
+from screener.universe.nasdaq100_names import NASDAQ_100_COMPANY_NAMES
 
 from .context import _close_improvement_streak, _latest_change, _percent_return
 
@@ -23,7 +24,10 @@ from .context import _close_improvement_streak, _latest_change, _percent_return
 class StaticUniverseProvider:
     def load_universe(self, context: PipelineContext) -> list[TickerInput]:
         definition = load_static_universe(name=context.universe_name)
-        return [TickerInput(ticker=ticker) for ticker in definition.tickers]
+        return [
+            TickerInput(ticker=ticker, name=NASDAQ_100_COMPANY_NAMES.get(ticker))
+            for ticker in definition.tickers
+        ]
 
 
 class YFinanceMarketDataProvider:

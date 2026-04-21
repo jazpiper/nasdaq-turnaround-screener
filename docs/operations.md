@@ -77,6 +77,7 @@ python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-
 - 장 마감 후 daily run은 `python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
 - Oracle을 쓰는 환경이면 bootstrap 단계에서 `python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
 - OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/` 입니다.
+- daily report JSON/Markdown에는 candidate별 ticker와 company name이 함께 포함됩니다.
 - intraday artifact는 daily run 보강용이므로, 기본적으로 OpenClaw가 직접 읽을 필요는 없습니다.
 
 ## 8. OpenClaw Command Template

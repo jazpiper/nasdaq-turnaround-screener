@@ -32,6 +32,7 @@ class StubPipeline:
             candidates=[
                 CandidateResult(
                     ticker="AAPL",
+                    name="Apple Inc.",
                     score=78,
                     subscores=ScoreBreakdown(oversold=20, bottom_context=17, reversal=23, volume=10, market_context=8),
                     close=172.4,
@@ -53,7 +54,7 @@ class StubPipeline:
             context.output_dir.mkdir(parents=True, exist_ok=True)
             artifacts.markdown_path.write_text("# Report\n\nAAPL\n", encoding="utf-8")
             artifacts.json_report_path.write_text(
-                json.dumps({"date": context.run_date.isoformat(), "candidate_count": 1, "candidates": [{"ticker": "AAPL"}]}),
+                json.dumps({"date": context.run_date.isoformat(), "candidate_count": 1, "candidates": [{"ticker": "AAPL", "name": "Apple Inc."}]}),
                 encoding="utf-8",
             )
             artifacts.metadata_path.write_text(
@@ -172,6 +173,7 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert payload["date"] == "2026-04-21"
     assert payload["candidate_count"] == 1
     assert payload["candidates"][0]["ticker"] == "AAPL"
+    assert payload["candidates"][0]["name"] == "Apple Inc."
 
 
 def test_run_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:

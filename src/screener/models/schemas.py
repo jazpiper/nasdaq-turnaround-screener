@@ -23,6 +23,7 @@ class TickerInput(BaseModel):
 
 class CandidateResult(BaseModel):
     ticker: str
+    name: str | None = None
     score: int
     subscores: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     close: float | None = None

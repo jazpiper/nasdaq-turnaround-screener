@@ -45,6 +45,7 @@ class RankedCandidateScorer:
         candidate = ranked[0]
         return CandidateResult(
             ticker=candidate.ticker,
+            name=ticker.name,
             score=candidate.score,
             subscores=ScoreBreakdown(**candidate.subscores),
             close=_maybe_float(candidate.snapshot.get("close")),
