@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from screener.intraday_ops import (
+    DEFAULT_COLLECTOR_COMMAND_TEMPLATE,
     DEFAULT_INTRADAY_WINDOW_IDS,
     IntradayPlan,
     build_collector_command,
@@ -81,4 +82,34 @@ def test_build_collector_command_expands_placeholders() -> None:
         "/tmp/project/output/intraday",
         "--root",
         "/tmp/project",
+    ]
+
+
+def test_default_collector_template_runs_full_universe_with_rate_limit_buffer() -> None:
+    command = build_collector_command(
+        command_template=DEFAULT_COLLECTOR_COMMAND_TEMPLATE,
+        python_path=Path("/tmp/project/.venv/bin/python"),
+        run_date="2026-04-21",
+        window_id="Open-1",
+        window_index=5,
+        output_dir=Path("/tmp/project/output/intraday/2026-04-21/open-1"),
+        output_root=Path("/tmp/project/output/intraday"),
+        project_root=Path("/tmp/project"),
+    )
+
+    assert command == [
+        "/tmp/project/.venv/bin/python",
+        "-m",
+        "screener.cli.main",
+        "collect-window",
+        "--date",
+        "2026-04-21",
+        "--window-index",
+        "0",
+        "--total-windows",
+        "1",
+        "--max-credits-per-minute",
+        "7",
+        "--output-dir",
+        "/tmp/project/output/intraday",
     ]

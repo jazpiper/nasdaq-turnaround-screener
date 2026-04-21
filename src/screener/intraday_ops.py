@@ -14,7 +14,7 @@ DEFAULT_INTRADAY_WINDOW_IDS: tuple[str, ...] = (
 )
 DEFAULT_COLLECTOR_COMMAND_TEMPLATE = (
     "{python} -m screener.cli.main collect-window "
-    "--date {date} --window-index {window_index} --output-dir {output_root}"
+    "--date {date} --window-index 0 --total-windows 1 --max-credits-per-minute 7 --output-dir {output_root}"
 )
 
 

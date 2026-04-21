@@ -36,10 +36,11 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --ski
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install --persist-oracle-sql
 ```
 
-- 기본 장중 cadence는 `open-1`, `open-2`, `midday-1`, `midday-2`, `power-hour-1`, `power-hour-2` 의 6개 window입니다.
-- collector는 NASDAQ-100 universe를 window별로 고정 분할하고, 분당 최대 8건 기준으로 보수적으로 수집합니다.
-- 실제 artifact는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 기록됩니다.
-- `scripts/run_intraday_window.py` 는 OpenClaw/cron wrapper이고, 실제 수집은 내부에서 `collect-window` CLI를 호출합니다.
+- 기본 장중 cadence는 `open-1`, `open-2`, `midday-1`, `midday-2`, `power-hour-1`, `power-hour-2` 의 6개 slot입니다.
+- OpenClaw/cron wrapper인 `scripts/run_intraday_window.py` 는 각 slot마다 **NASDAQ-100 전체를 다시 수집**합니다. `open-1` 이 17개만 담당하는 식의 분할 수집은 더 이상 기본 동작이 아닙니다.
+- wrapper 기본값은 `collect-window --window-index 0 --total-windows 1 --max-credits-per-minute 7` 이며, Twelve Data free plan `8 credits/min` 에 대해 1 credit 버퍼를 남겨 rate-limit 실패를 줄입니다.
+- raw `collect-window` CLI는 여전히 `--total-windows` 를 늘려 수동 분할 수집에 사용할 수 있습니다.
+- 실제 artifact는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 기록됩니다. wrapper 기본값에서는 `window-01-of-01` 아래에 쌓입니다.
 
 ## 4. Backtest
 ```bash
@@ -92,7 +93,7 @@ python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-
 기본 template는 아래와 같습니다.
 
 ```bash
-{python} -m screener.cli.main collect-window --date {date} --window-index {window_index} --output-dir {output_root}
+{python} -m screener.cli.main collect-window --date {date} --window-index 0 --total-windows 1 --max-credits-per-minute 7 --output-dir {output_root}
 ```
 
 ## 9. Exit and Failure Handling

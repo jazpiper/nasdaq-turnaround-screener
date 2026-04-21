@@ -34,7 +34,7 @@ python -m screener.cli.main init-oracle-schema
 python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
 
-python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
+python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --total-windows 1 --max-credits-per-minute 7
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
 python scripts/run_daily.py --date 2026-04-21 --skip-install
 ```
@@ -42,7 +42,7 @@ python scripts/run_daily.py --date 2026-04-21 --skip-install
 ## Output Layout
 - `output/daily/YYYY-MM-DD/`: `daily-report.md`, `daily-report.json`, `run-metadata.json`
 - `output/daily/latest/`: 가장 최근 daily run 포인터
-- `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../`: staged intraday metadata와 quote artifact
+- `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../`: staged intraday metadata와 quote artifact (`run_intraday_window.py` 기본값은 full-universe 수집이므로 보통 `window-01-of-01`)
 
 ## Project Layout
 ```text
@@ -67,3 +67,7 @@ docs/             current-state documentation
 - `docs/architecture.md`: 현재 구현된 시스템 구조, 데이터 흐름, 저장 방식
 - `docs/signals.md`: 현재 코드 기준 필터, 점수화, penalty 규칙
 - `docs/operations.md`: 실행 명령, OpenClaw 연동 방식, NY trading day 기준 운영 흐름
+
+## Intraday Scheduling Note
+- `scripts/run_intraday_window.py` 는 slot 이름(`open-1` 등)을 스케줄 라벨로만 사용하고, 각 실행마다 NASDAQ-100 전체를 다시 수집합니다.
+- 기본 wrapper command는 Twelve Data free plan 대비 버퍼를 두기 위해 `max_credits_per_minute=7` 을 사용합니다.
