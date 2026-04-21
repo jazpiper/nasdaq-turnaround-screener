@@ -438,9 +438,12 @@ QQQ는 ticker universe 외 별도 benchmark history로 fetch합니다.
 ### snapshot schema version
 새 필드가 많이 늘어나므로 schema version 증가를 미리 설계해야 합니다.
 
-추천:
-- 현재: `schema_version = 1`
-- 확장 후: `schema_version = 2`
+현재 구현 상태:
+- 현재: `schema_version = 2`
+- Priority 1, 2, 3 baseline 과 Phase 3 refinement 까지 반영된 상태
+
+이 문서 관점의 권장:
+- 이후 snapshot field 해석이 깨질 정도의 구조 변경이 생기면 다음 schema version 을 올립니다.
 
 ### snapshot 확장 필드 묶음
 Priority 1:

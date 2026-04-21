@@ -1,7 +1,7 @@
 # Indicator Persistence Plan
 
 ## 상태
-이 문서의 Phase 1 제안은 현재 구현에 반영되었습니다.
+이 문서의 초기 제안은 현재 구현에 반영되었습니다.
 
 현재 구현 상태:
 - `CandidateResult.indicator_snapshot`
@@ -9,8 +9,10 @@
 - `screen_candidates.indicator_snapshot_json`
 - `screen_candidates.snapshot_schema_version`
 - pipeline snapshot builder + Oracle SQL persistence
+- snapshot schema version `2`
+- earnings / QQQ relative strength / volatility normalization / candle structure / candle refinement field 저장
 
-이 문서는 구현된 설계 기록과 Phase 2 이후 후보 아이디어를 함께 남겨둡니다.
+이 문서는 구현된 설계 기록과 이후 audit / research 확장 아이디어를 함께 남겨둡니다.
 
 ## 목적
 현재 스크리너는 후보를 고를 때 여러 indicator와 context를 사용하고, Oracle SQL에는 candidate-level decision snapshot까지 함께 저장합니다.
@@ -46,31 +48,45 @@
 - factor subscores
 
 ### 현재 snapshot에 포함되는 주요 값
-- `close`
-- `low`
-- `bb_lower`
-- `rsi_14`
-- `sma_5`
-- `sma_20`
-- `sma_60`
-- `distance_to_20d_low`
-- `distance_to_60d_low`
-- `average_volume_20d`
-- `volume_ratio_20d`
-- `close_improvement_streak`
-- `rsi_3d_change`
-- `market_context_score`
-- `weekly_bars_available`
-- `weekly_close`
-- `weekly_sma_5`
-- `weekly_sma_10`
-- `weekly_close_improving`
-- `weekly_trend_penalty`
-- `weekly_trend_severe_damage`
+- base technicals:
+  - `close`, `low`, `bb_lower`, `rsi_14`
+  - `sma_5`, `sma_20`, `sma_60`
+  - `distance_to_20d_low`, `distance_to_60d_low`
+  - `average_volume_20d`, `volume_ratio_20d`
+  - `close_improvement_streak`, `rsi_3d_change`
+  - `market_context_score`
+- earnings / event risk:
+  - `earnings_data_available`
+  - `next_earnings_date`
+  - `days_to_next_earnings`
+  - `days_since_last_earnings`
+  - `earnings_penalty`
+- QQQ relative strength:
+  - `qqq_return_20d`, `qqq_return_60d`
+  - `stock_return_20d`, `stock_return_60d`
+  - `rel_strength_20d_vs_qqq`, `rel_strength_60d_vs_qqq`
+  - `relative_strength_score`
+- volatility:
+  - `atr_14`, `atr_14_pct`
+  - `daily_range_pct`, `bb_width_pct`
+  - `volatility_penalty`
+- candle structure:
+  - `close_above_open`, `close_location_value`, `lower_wick_ratio`
+  - `upper_wick_ratio`, `real_body_pct`
+  - `gap_down_pct`, `gap_down_reclaim`
+  - `inside_day`, `bullish_engulfing_like`
+- weekly context:
+  - `weekly_bars_available`
+  - `weekly_close`
+  - `weekly_sma_5`
+  - `weekly_sma_10`
+  - `weekly_close_improving`
+  - `weekly_trend_penalty`
+  - `weekly_trend_severe_damage`
 
 ### 아직 snapshot에 안 넣는 후보 값
-- `atr_pct`
-- earnings proximity
+- sector-relative context
+- universe-level rejected audit fields
 - regime context 확장 필드
 
 ---
@@ -239,15 +255,16 @@
 
 따라서 아래처럼 분리하는 것이 좋습니다.
 
-### Phase 1 (implemented)
+### Phase 1-3 (implemented)
 - candidate-level indicator snapshot 저장
+- earnings / QQQ relative strength / volatility / candle structure / candle refinement field 저장
 - 목표: 운영/설명/디버그
 
-### Phase 2
+### Next phase
 - optional universe-level feature snapshot 또는 audit sample 저장
 - 목표: 리서치/백테스트/threshold tuning
 
-현재는 **Phase 1까지만** 하는 것이 맞습니다.
+현재는 candidate-level decision snapshot 까지 구현된 상태이고, 다음 관심사는 audit / research layer 확장입니다.
 
 ---
 
@@ -258,7 +275,7 @@
 `screen_candidates`에 아래 2개를 추가
 
 1. `indicator_snapshot_json CLOB`
-2. `snapshot_schema_version NUMBER DEFAULT 1 NOT NULL`
+2. `snapshot_schema_version NUMBER DEFAULT 2 NOT NULL`
 
 ### 저장 내용
 초기 snapshot에 포함할 최소 항목:
@@ -300,13 +317,13 @@
 
 ### 추가 컬럼
 - `indicator_snapshot_json CLOB`
-- `snapshot_schema_version NUMBER DEFAULT 1 NOT NULL`
+- `snapshot_schema_version NUMBER DEFAULT 2 NOT NULL`
 
 ### migration 전략
 현재 구현은 `_ensure_schema()` 안에 아래 guarded `ALTER TABLE ... ADD ...` block을 넣는 방식입니다.
 
 1. `indicator_snapshot_json CLOB`
-2. `snapshot_schema_version NUMBER DEFAULT 1 NOT NULL`
+2. `snapshot_schema_version NUMBER DEFAULT 2 NOT NULL`
 
 컬럼이 이미 있으면 Oracle `SQLCODE != -1430` 일 때만 예외를 다시 올립니다.
 작고 단순하며 현재 구조와 맞습니다.

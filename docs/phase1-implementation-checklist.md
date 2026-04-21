@@ -73,7 +73,7 @@
 ---
 
 ## Step 3, Priority 1 Hardening
-현재 상태: **in progress**
+현재 상태: **done**
 
 ### Checklist
 - [x] metadata note / failure message 정리
@@ -83,9 +83,10 @@
 - [x] 수동 daily run sanity check
 
 ### Hardening note
-- 수동 run 자체는 성공했지만, 초기 확인 시 현재 환경에서는 기본 provider가 `twelve-data` 로 자동 선택되면서 free plan `8 credits/min` 제한에 걸려 candidate가 0건으로 끝났습니다.
-- 구현 관점에서는 fallback note가 정상 기록되는 것을 확인했고, 기능 검증 자체는 테스트로 보강했습니다.
+- 초기 확인 시 현재 환경에서는 기본 provider가 `twelve-data` 로 자동 선택되면서 free plan `8 credits/min` 제한에 걸려 candidate가 0건으로 끝났습니다.
 - 이후 hardening으로 daily 기본 provider 자동 선택은 다시 `yfinance` 로 고정했고, Twelve Data는 명시 선택 또는 staged collector 위주로 쓰도록 정리했습니다.
+- yfinance single-ticker benchmark fetch 에서 `Benchmark context unavailable: 'Date'` 문제가 있었고, `_flatten_yfinance_rows()` 추가로 해결했습니다.
+- 최종 sanity run 기준 `scripts/run_daily.py --date 2026-04-21` 에서 `Candidate count: 6` 을 확인했고, artifact 에 earnings / relative strength snapshot field 가 실제로 기록되었습니다.
 
 ---
 

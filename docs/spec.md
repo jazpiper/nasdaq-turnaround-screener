@@ -22,19 +22,23 @@
 9. Optional persistence
 
 ## 2. Indicator Set
-필수 지표:
+현재 구현된 핵심 지표:
 - Bollinger Bands(20, 2)
 - RSI(14)
 - SMA 5 / 20 / 60
 - distance from 20D low
 - distance from 60D low
 - 20D average volume 대비 volume ratio
+- weekly trend context (`weekly_sma_5`, `weekly_sma_10`, `weekly_trend_penalty`, `weekly_trend_severe_damage`)
+- earnings context (`next_earnings_date`, `days_to_next_earnings`, `days_since_last_earnings`, `earnings_penalty`)
+- QQQ relative strength (`qqq_return_20d`, `qqq_return_60d`, `stock_return_20d`, `stock_return_60d`, `rel_strength_*`, `relative_strength_score`)
+- volatility normalization (`atr_14`, `atr_14_pct`, `daily_range_pct`, `bb_width_pct`, `volatility_penalty`)
+- candle structure / reversal quality (`close_above_open`, `close_location_value`, `lower_wick_ratio`, `upper_wick_ratio`, `real_body_pct`, `gap_down_pct`, `gap_down_reclaim`, `inside_day`, `bullish_engulfing_like`)
 
 후속 후보:
-- ATR
 - MACD histogram slope
-- gap / wick pattern summary
 - sector relative strength
+- rejected candidate audit / universe-level feature snapshot
 
 ## 3. Core Filter Baseline
 후보 선별 기본 조건:
@@ -56,6 +60,9 @@
 - 5일선 회복 또는 회복 시도
 - 최근 2~3일 종가 개선
 - downside rejection wick
+- gap down reclaim
+- inside day bullish hold
+- bullish engulfing-like pattern
 - RSI 과매도 탈출 초기
 
 ## 5. Outputs
