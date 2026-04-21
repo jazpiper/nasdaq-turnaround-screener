@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 import pandas as pd
 
 from screener.config import Settings
-from screener.data import YFinanceDailyBarFetcher
+from screener.data import MarketDataFetcher, YFinanceDailyBarFetcher, build_market_data_fetcher
 from screener.indicators.technicals import add_indicator_columns, rolling_mean
 from screener.models import (
     CandidateResult,
@@ -61,7 +61,7 @@ class StaticUniverseProvider:
 
 
 class YFinanceMarketDataProvider:
-    def __init__(self, fetcher: YFinanceDailyBarFetcher | None = None) -> None:
+    def __init__(self, fetcher: MarketDataFetcher | None = None) -> None:
         self.fetcher = fetcher or YFinanceDailyBarFetcher()
         self._history_by_ticker: dict[str, pd.DataFrame] = {}
         self._failures_by_ticker: dict[str, str] = {}
@@ -183,7 +183,7 @@ class ScreenPipeline:
     ) -> None:
         self.settings = settings
         self.universe_provider = universe_provider or StaticUniverseProvider()
-        self.market_data_provider = market_data_provider or YFinanceMarketDataProvider()
+        self.market_data_provider = market_data_provider or build_market_data_provider(settings)
         self.indicator_engine = indicator_engine or TechnicalIndicatorEngine()
         self.candidate_scorer = candidate_scorer or RankedCandidateScorer()
 
@@ -253,6 +253,15 @@ class ScreenPipeline:
             json_report_path=json_report_path,
             metadata_path=metadata_path,
         )
+
+
+def build_market_data_provider(settings: Settings) -> YFinanceMarketDataProvider:
+    fetcher = build_market_data_fetcher(
+        settings.market_data_provider,
+        twelve_data_api_key=settings.twelve_data_api_key,
+        twelve_data_base_url=settings.twelve_data_base_url,
+    )
+    return YFinanceMarketDataProvider(fetcher=fetcher)
 
 
 def _close_improvement_streak(closes: list[float]) -> int:

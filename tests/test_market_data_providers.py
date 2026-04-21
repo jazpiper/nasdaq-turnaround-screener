@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -15,9 +17,17 @@ from screener.data.market_data import (
     build_market_data_fetcher,
     normalize_ohlcv_rows,
 )
+from screener.secrets import load_openclaw_secrets
 
 
 class MarketDataProviderTests(unittest.TestCase):
+    def setUp(self):
+        self._env_backup = os.environ.copy()
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env_backup)
+
     def test_normalize_ohlcv_rows_accepts_twelve_data_shape(self):
         bars = normalize_ohlcv_rows(
             "MSFT",
@@ -128,16 +138,55 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertIn("GOOD", result.bars_by_ticker)
         self.assertEqual(result.failed_tickers["BAD"], "bad symbol")
 
+    def test_load_openclaw_secrets_reads_nested_values(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            secrets_path = Path(tmp_dir) / "secrets.json"
+            secrets_path.write_text(json.dumps({"twelveData": {"apiKey": "oc-secret"}}), encoding="utf-8")
+
+            secrets = load_openclaw_secrets(secrets_path)
+
+        self.assertIsNotNone(secrets)
+        self.assertEqual(secrets.get("/twelveData/apiKey"), "oc-secret")
+        self.assertIsNone(secrets.get("/missing"))
+
     def test_get_settings_reads_provider_configuration_from_env(self):
-        self.addCleanup(lambda: __import__("os").environ.pop("SCREENER_MARKET_DATA_PROVIDER", None))
-        self.addCleanup(lambda: __import__("os").environ.pop("TWELVE_DATA_API_KEY", None))
-        __import__("os").environ["SCREENER_MARKET_DATA_PROVIDER"] = "twelve-data"
-        __import__("os").environ["TWELVE_DATA_API_KEY"] = "env-secret"
+        os.environ["SCREENER_MARKET_DATA_PROVIDER"] = "twelve-data"
+        os.environ["TWELVE_DATA_API_KEY"] = "env-secret"
 
         settings = get_settings()
 
         self.assertEqual(settings.market_data_provider, "twelve-data")
         self.assertEqual(settings.twelve_data_api_key, "env-secret")
+
+    def test_get_settings_uses_openclaw_secrets_when_env_missing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            secrets_path = Path(tmp_dir) / "secrets.json"
+            secrets_path.write_text(json.dumps({"twelveData": {"apiKey": "secret-from-openclaw"}}), encoding="utf-8")
+
+            settings = get_settings(openclaw_secrets_path=secrets_path)
+
+        self.assertEqual(settings.market_data_provider, "twelve-data")
+        self.assertEqual(settings.twelve_data_api_key, "secret-from-openclaw")
+        self.assertEqual(settings.openclaw_secrets_path, secrets_path)
+
+    def test_get_settings_prefers_explicit_env_over_openclaw_secrets(self):
+        os.environ["TWELVE_DATA_API_KEY"] = "env-secret"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            secrets_path = Path(tmp_dir) / "secrets.json"
+            secrets_path.write_text(json.dumps({"twelveData": {"apiKey": "secret-from-openclaw"}}), encoding="utf-8")
+
+            settings = get_settings(openclaw_secrets_path=secrets_path)
+
+        self.assertEqual(settings.market_data_provider, "twelve-data")
+        self.assertEqual(settings.twelve_data_api_key, "env-secret")
+
+    def test_get_settings_falls_back_to_yfinance_when_no_twelve_data_key_exists(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            secrets_path = Path(tmp_dir) / "missing-secrets.json"
+            settings = get_settings(openclaw_secrets_path=secrets_path)
+
+        self.assertEqual(settings.market_data_provider, "yfinance")
+        self.assertIsNone(settings.twelve_data_api_key)
 
 
 if __name__ == "__main__":

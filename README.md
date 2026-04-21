@@ -71,10 +71,10 @@ pytest
 구체적인 universe, market data, indicator, scoring 구현은 분리된 interface를 통해 이후 병합하도록 남겨두었습니다.
 
 ## Market Data Providers
-- 기본 provider는 `yfinance` 입니다.
-- `SCREENER_MARKET_DATA_PROVIDER=twelve-data` 로 바꾸면 Twelve Data fetcher를 선택할 수 있습니다.
-- Twelve Data 사용 시 API key는 `TWELVE_DATA_API_KEY` 환경변수나 설정 override로 주입해야 합니다.
-- 이 단계에서는 provider abstraction과 일봉 OHLCV 정규화까지만 추가되었고, 전체 파이프라인 wiring은 별도 작업으로 남겨둡니다.
+- 기본적으로는 `yfinance` 를 사용합니다.
+- `TWELVE_DATA_API_KEY` 가 있거나 OpenClaw local secrets 파일(`~/.openclaw/secrets.json`, override: `SCREENER_OPENCLAW_SECRETS_PATH`)에 `/twelveData/apiKey` 가 있으면 기본 provider가 자동으로 `twelve-data` 로 전환됩니다.
+- `SCREENER_MARKET_DATA_PROVIDER=twelve-data` 또는 `yfinance` 로 명시하면 자동 선택보다 우선합니다.
+- Twelve Data API key는 `TWELVE_DATA_API_KEY` 환경변수가 OpenClaw secrets보다 우선합니다.
 
 ## Future Extensions
 - RSI, MACD, volume, gap, earnings proximity 반영

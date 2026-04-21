@@ -14,6 +14,7 @@ from screener.pipeline import (
     TechnicalIndicatorEngine,
     YFinanceMarketDataProvider,
     build_context,
+    build_market_data_provider,
 )
 
 
@@ -121,6 +122,13 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert artifacts.metadata_path == tmp_path / "run-metadata.json"
     assert artifacts.markdown_path.exists()
     assert "Data Failures" in artifacts.markdown_path.read_text(encoding="utf-8")
+
+
+def test_build_market_data_provider_uses_settings_choice() -> None:
+    provider = build_market_data_provider(Settings(market_data_provider="twelve-data", twelve_data_api_key="secret"))
+
+    assert provider.fetcher.provider_name == "twelve-data"
+    assert provider.fetcher.api_key == "secret"
 
 
 def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
