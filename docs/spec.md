@@ -61,9 +61,12 @@
 ## 5. Outputs
 
 ### 5.1 File Outputs
-- `output/daily-report.md`
-- `output/daily-report.json`
-- `output/run-metadata.json`
+선택한 output directory 아래에 아래 파일을 생성합니다.
+- `daily-report.md`
+- `daily-report.json`
+- `run-metadata.json`
+
+일상 운영용 `scripts/run_daily.py` 는 기본적으로 `output/daily/YYYY-MM-DD/` 아래에 이 파일들을 생성합니다.
 
 ### 5.2 Candidate Fields
 각 candidate는 최소한 아래 필드를 포함합니다.
@@ -81,6 +84,8 @@
 Optional persistence/debug fields:
 - `indicator_snapshot` (rule 판단에 사용한 final feature snapshot)
 - `snapshot_schema_version`
+
+현재 JSON report는 `candidate.model_dump(mode="json")` 를 사용하므로, 이 optional field가 있으면 artifact에도 그대로 포함됩니다. Markdown report는 ticker / score / reasons / risks 중심 요약만 출력합니다.
 
 ### 5.3 JSON Example
 ```json
@@ -115,10 +120,13 @@ Optional persistence/debug fields:
 
 ## 6. CLI Surface
 ```bash
-python -m screener.cli run --date 2026-04-21
-python -m screener.cli run --date 2026-04-21 --persist oracle-sql
-python -m screener.cli run --date 2026-04-21 --persist oracle-mongo
+python -m screener.cli.main run --date 2026-04-21
+python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
+python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
+screener run --date 2026-04-21
 ```
+
+현재 구현된 persistence flag는 Oracle SQL만 지원합니다. Mongo API persistence는 아직 구현되지 않았습니다.
 
 ## 7. Operational Requirements
 - 장 종료 후 1회 daily run
@@ -126,6 +134,7 @@ python -m screener.cli run --date 2026-04-21 --persist oracle-mongo
 - OpenClaw에서 실행 가능한 단일 command 제공
 - partial data issue는 metadata에 남기되 전체 run은 가능하면 지속
 - dry-run 지원
+- Oracle SQL persistence는 기본 비활성이며 `--persist-oracle-sql` 또는 `SCREENER_ORACLE_SQL_ENABLED=1` 일 때만 활성화
 
 ## 8. Non-goals
 - 자동 주문 실행

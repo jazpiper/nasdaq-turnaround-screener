@@ -4,7 +4,8 @@
 - OpenClaw core와 분리된 독립 프로젝트로 유지
 - daily batch 실행에 최적화된 구조
 - 데이터 수집, 신호 계산, 점수화, 리포팅, 저장을 느슨하게 분리
-- 초기에는 file output 중심, 이후 Oracle SQL / Mongo API 저장까지 확장 가능
+- file output을 기본 truth artifact로 유지하고, Oracle SQL persistence를 opt-in으로 붙인다
+- Mongo/API 계열 document 저장은 future option으로 남긴다
 
 ## 2. Runtime Model
 기본 실행 단위는 하루 1회 batch run입니다.
@@ -30,9 +31,11 @@ scheduler(OpenClaw cron/manual)
 - dry-run / daily-run / backfill 모드 처리
 - 전체 pipeline orchestration
 
-예상 command:
+현재 command 예시:
 ```bash
-python -m screener.cli run --date 2026-04-21
+python -m screener.cli.main run --date 2026-04-21
+python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
+screener run --date 2026-04-21
 ```
 
 ### 3.2 Universe Layer
@@ -102,14 +105,25 @@ python -m screener.cli run --date 2026-04-21
 - candidate별 reason / risk summary 생성
 
 출력 파일:
-- `output/daily-report.md`
-- `output/daily-report.json`
+- `<output-dir>/daily-report.md`
+- `<output-dir>/daily-report.json`
+- `<output-dir>/run-metadata.json`
+
+JSON artifact는 candidate 전체를 `model_dump(mode="json")` 로 직렬화하므로, `indicator_snapshot` 이 있으면 그대로 노출됩니다. Markdown은 요약형으로 유지합니다.
 
 ### 3.8 Storage Adapter
 역할:
 - 선택적으로 결과 저장
-- 초기에는 file-only로 시작 가능
-- 이후 Oracle SQL / Mongo API 둘 다 지원 가능
+- 현재는 Oracle SQL persistence 지원
+- file artifact와 DB persistence를 분리
+
+현재 구현:
+- daily run Oracle SQL persistence
+- intraday collection Oracle SQL persistence
+- `screen_candidates.indicator_snapshot_json` + `snapshot_schema_version`
+
+future option:
+- document/archive 계열 저장소 추가
 
 storage adapter가 필요한 이유:
 - file artifact와 DB persistence를 분리
@@ -138,7 +152,6 @@ src/
     storage/
       files.py
       oracle_sql.py
-      oracle_mongo.py
     models/
       schemas.py
 ```
@@ -152,8 +165,8 @@ src/
 ### 5.2 Secret Strategy
 OpenClaw secrets를 통해 다음 credential을 참조합니다.
 - Oracle SQL credential
-- Oracle Mongo API URI
 - 향후 market data provider API key
+- 필요해질 경우 future document store credential
 
 ### 5.3 Delivery Flow
 ```text
@@ -171,7 +184,7 @@ OpenClaw cron
 - CLI exit code는 운영 자동화에 사용 가능하게 유지
 
 ## 7. Evolution Path
-- V1: file output only
-- V1.5: Oracle SQL 결과 저장
-- V2: historical candidate store + score history
+- Current: file output + optional Oracle SQL persistence
+- Next: historical candidate store/query hardening + review/audit views
+- Later: universe-level feature snapshots or rejection audit
 - V3: dashboard/service layer

@@ -10,6 +10,7 @@ NASDAQ-100 안에서 과매도 구간에 진입했지만 무작정 약한 종목
 - 매일 같은 기준으로 반복 가능
 - 후보 선정 이유가 명확함
 - 과도한 종목 수를 상위 몇 개로 축소
+- 장중 staged intraday snapshot으로 EOD 판단 입력을 보강 가능
 - OpenClaw가 자동 실행/요약을 담당 가능
 
 ## 대상 사용자
@@ -25,5 +26,7 @@ NASDAQ-100 안에서 과매도 구간에 진입했지만 무작정 약한 종목
 
 ## 성공 기준
 - 매일 장 종료 후 안정적으로 후보 리포트 생성
+- 필요 시 staged intraday snapshot을 반영한 daily run 수행 가능
 - 후보당 2~5개의 핵심 근거 제시
+- candidate별 indicator snapshot을 통해 왜 선택됐는지 추적 가능
 - 장기적으로 false positive를 줄이도록 rules를 개선 가능

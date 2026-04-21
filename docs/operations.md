@@ -98,10 +98,11 @@ cd /path/to/nasdaq-screener-ops && python scripts/run_daily.py --skip-install
 - `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING`: Oracle SQL env override (기본은 OpenClaw secrets `/oracleDb/*`)
 
 ## 4. Secrets policy
-- Oracle SQL, Mongo, API key 등 credential은 OpenClaw secrets에서 관리
+- 현재 구현된 Oracle SQL credential과 provider API key는 OpenClaw secrets에서 관리
 - repo, docs, test fixture에 credential 저장 금지
 - `.env.local`은 local experimentation 용도로만 사용하고 gitignore 유지
 - `TWELVE_DATA_API_KEY` 같은 provider secret은 cron 환경 또는 OpenClaw secret injection으로 주입
+- Mongo/API 계열 credential은 future option이며, 도입 전까지는 운영 전제에 넣지 않음
 
 ## 5. Logging and outputs
 장중 기본 산출물 위치:

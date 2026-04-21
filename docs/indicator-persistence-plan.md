@@ -1,7 +1,19 @@
 # Indicator Persistence Plan
 
+## 상태
+이 문서의 Phase 1 제안은 현재 구현에 반영되었습니다.
+
+현재 구현 상태:
+- `CandidateResult.indicator_snapshot`
+- `CandidateResult.snapshot_schema_version`
+- `screen_candidates.indicator_snapshot_json`
+- `screen_candidates.snapshot_schema_version`
+- pipeline snapshot builder + Oracle SQL persistence
+
+이 문서는 구현된 설계 기록과 Phase 2 이후 후보 아이디어를 함께 남겨둡니다.
+
 ## 목적
-현재 스크리너는 후보를 고를 때 여러 indicator와 context를 사용하지만, Oracle SQL에는 일부 결과만 저장합니다.
+현재 스크리너는 후보를 고를 때 여러 indicator와 context를 사용하고, Oracle SQL에는 candidate-level decision snapshot까지 함께 저장합니다.
 
 지금 문서의 목적은 아래를 분리해서 정의하는 것입니다.
 
@@ -29,21 +41,37 @@
 - `distance_to_20d_low`
 - `reasons_json`
 - `risks_json`
+- `indicator_snapshot_json`
+- `snapshot_schema_version`
 - factor subscores
 
-### 현재 런타임에서 계산하지만 DB에 안 남는 주요 값
+### 현재 snapshot에 포함되는 주요 값
+- `close`
+- `low`
+- `bb_lower`
+- `rsi_14`
 - `sma_5`
 - `sma_20`
 - `sma_60`
+- `distance_to_20d_low`
+- `distance_to_60d_low`
 - `average_volume_20d`
 - `volume_ratio_20d`
 - `close_improvement_streak`
 - `rsi_3d_change`
+- `market_context_score`
+- `weekly_bars_available`
+- `weekly_close`
 - `weekly_sma_5`
 - `weekly_sma_10`
+- `weekly_close_improving`
 - `weekly_trend_penalty`
 - `weekly_trend_severe_damage`
-- 향후 추가 후보: `atr_pct`, earnings proximity, regime context
+
+### 아직 snapshot에 안 넣는 후보 값
+- `atr_pct`
+- earnings proximity
+- regime context 확장 필드
 
 ---
 
@@ -56,7 +84,8 @@
 - 나중에 scoring 규칙을 바꿀 때, 어떤 항목이 실제로 score를 움직였는가?
 - 특정 risk/reason이 어떤 raw indicator에서 나왔는가?
 
-즉 현재 DB는 **final decision summary**는 저장하지만, **decision input snapshot**은 충분히 남기지 않습니다.
+즉 이 프로젝트는 이제 **final decision summary** 뿐 아니라 **candidate-level decision input snapshot** 도 함께 남깁니다.
+다만 universe 전체 research snapshot 까지는 아직 다루지 않습니다.
 
 ---
 
@@ -115,24 +144,26 @@
 {
   "schema_version": 1,
   "close": 57.31,
+  "low": 56.82,
   "bb_lower": 56.33,
   "rsi_14": 44.47,
   "sma_5": 57.42,
   "sma_20": 58.12,
   "sma_60": 61.21,
   "distance_to_20d_low": 1.29,
+  "distance_to_60d_low": 5.44,
   "average_volume_20d": 3245000,
   "volume_ratio_20d": 0.76,
   "close_improvement_streak": 2,
   "rsi_3d_change": 3.8,
-  "weekly": {
-    "close": 57.31,
-    "sma_5": 58.4,
-    "sma_10": 60.2,
-    "close_improving": false,
-    "trend_penalty": 3.0,
-    "severe_damage": false
-  }
+  "market_context_score": 7.0,
+  "weekly_bars_available": 27,
+  "weekly_close": 57.31,
+  "weekly_sma_5": 58.4,
+  "weekly_sma_10": 60.2,
+  "weekly_close_improving": false,
+  "weekly_trend_penalty": 3.0,
+  "weekly_trend_severe_damage": false
 }
 ```
 
@@ -208,7 +239,7 @@
 
 따라서 아래처럼 분리하는 것이 좋습니다.
 
-### Phase 1
+### Phase 1 (implemented)
 - candidate-level indicator snapshot 저장
 - 목표: 운영/설명/디버그
 
@@ -223,8 +254,8 @@
 ## 권장 설계
 
 ## Recommendation
-### 이번 라운드에서 할 것
-`screen_candidates`에 아래 2개만 추가
+### 이번 라운드에서 구현한 것
+`screen_candidates`에 아래 2개를 추가
 
 1. `indicator_snapshot_json CLOB`
 2. `snapshot_schema_version NUMBER DEFAULT 1 NOT NULL`
@@ -272,14 +303,13 @@
 - `snapshot_schema_version NUMBER DEFAULT 1 NOT NULL`
 
 ### migration 전략
-현재 `_ensure_schema()`는 `CREATE TABLE IF NOT EXISTS` 스타일에 가까운 초기 생성만 다룹니다.
-따라서 컬럼 추가는 아래 둘 중 하나가 필요합니다.
+현재 구현은 `_ensure_schema()` 안에 아래 guarded `ALTER TABLE ... ADD ...` block을 넣는 방식입니다.
 
-1. `_ensure_schema()`에 `ALTER TABLE ... ADD ...` guarded block 추가
-2. 별도 one-time migration 함수 추가
+1. `indicator_snapshot_json CLOB`
+2. `snapshot_schema_version NUMBER DEFAULT 1 NOT NULL`
 
-추천은 **1번**입니다.
-작고 단순하며 현 구조와 맞습니다.
+컬럼이 이미 있으면 Oracle `SQLCODE != -1430` 일 때만 예외를 다시 올립니다.
+작고 단순하며 현재 구조와 맞습니다.
 
 ---
 
@@ -320,14 +350,11 @@
 
 ## 개발 범위 제안
 
-## Phase 1, 이번에 진행할 범위
+## Phase 1, 구현 범위
 1. `CandidateResult`에 optional snapshot 필드 추가
 2. pipeline에서 final indicator snapshot 생성
 3. Oracle SQL `screen_candidates`에 snapshot JSON + version 저장
-4. 테스트 추가
-   - snapshot builder unit test
-   - Oracle persistence test
-   - JSON roundtrip sanity test
+4. 테스트 반영
 5. 문서 업데이트
 
 ### Acceptance Criteria
@@ -366,7 +393,7 @@
 ---
 
 ## 바로 다음 액션 추천
-1. 이 문서 방향 승인
-2. `screen_candidates` snapshot JSON 저장 구현
-3. daily 1회 실행 후 실제 row 예시 검증
-4. 필요하면 그 다음에 universe-level 저장을 별도 기획
+1. Oracle JSON query/view 예시 추가
+2. rejected candidate audit log 필요성 검토
+3. 필요하면 universe-level snapshot 저장을 별도 기획
+4. snapshot 필드 확장 시 `schema_version` 증가 규칙 문서화
