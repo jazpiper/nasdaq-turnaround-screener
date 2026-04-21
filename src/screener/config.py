@@ -4,9 +4,11 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from screener.intraday_ops import DEFAULT_INTRADAY_WINDOW_IDS, parse_window_ids
 from screener.secrets import default_openclaw_secrets_path, load_openclaw_secrets
 
 DEFAULT_TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series"
+DEFAULT_INTRADAY_OUTPUT_ROOT = Path("output/intraday")
 
 
 @dataclass(slots=True)
@@ -27,6 +29,9 @@ class Settings:
             "Signals are generated from recent daily price history and technical ranking rules.",
         ]
     )
+    intraday_window_ids: tuple[str, ...] = DEFAULT_INTRADAY_WINDOW_IDS
+    intraday_output_root: Path = DEFAULT_INTRADAY_OUTPUT_ROOT
+    intraday_collector_command: str | None = None
 
 
 def get_settings(
@@ -45,6 +50,9 @@ def get_settings(
         twelve_data_api_key=resolved_twelve_data_api_key,
         twelve_data_base_url=os.getenv("TWELVE_DATA_BASE_URL", DEFAULT_TWELVE_DATA_BASE_URL),
         openclaw_secrets_path=resolved_secrets_path,
+        intraday_window_ids=parse_window_ids(os.getenv("SCREENER_INTRADAY_WINDOW_IDS")),
+        intraday_output_root=Path(os.getenv("SCREENER_INTRADAY_OUTPUT_ROOT", DEFAULT_INTRADAY_OUTPUT_ROOT)),
+        intraday_collector_command=_coerce_optional_string(os.getenv("SCREENER_INTRADAY_COLLECTOR_COMMAND")),
     )
     if output_dir is not None:
         settings.output_dir = Path(output_dir)
