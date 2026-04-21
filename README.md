@@ -65,6 +65,12 @@ pytest
 현재 CLI는 placeholder pipeline을 실행하고, dry-run이 아니면 `output/` 아래에 markdown/json metadata artifact를 생성합니다.
 구체적인 universe, market data, indicator, scoring 구현은 분리된 interface를 통해 이후 병합하도록 남겨두었습니다.
 
+## Market Data Providers
+- 기본 provider는 `yfinance` 입니다.
+- `SCREENER_MARKET_DATA_PROVIDER=twelve-data` 로 바꾸면 Twelve Data fetcher를 선택할 수 있습니다.
+- Twelve Data 사용 시 API key는 `TWELVE_DATA_API_KEY` 환경변수나 설정 override로 주입해야 합니다.
+- 이 단계에서는 provider abstraction과 일봉 OHLCV 정규화까지만 추가되었고, 전체 파이프라인 wiring은 별도 작업으로 남겨둡니다.
+
 ## Future Extensions
 - RSI, MACD, volume, gap, earnings proximity 반영
 - 섹터/시장 regime score 추가
