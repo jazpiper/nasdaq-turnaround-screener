@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import date, datetime
+from pathlib import Path
+
+from screener.data import DailyBar
+
+
+@dataclass(frozen=True)
+class StagedIntradayQuote:
+    ticker: str
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    source_path: Path
+
+    def as_daily_bar(self) -> DailyBar:
+        trading_day = self.timestamp.date()
+        return DailyBar(
+            ticker=self.ticker,
+            trading_date=trading_day,
+            open=self.open,
+            high=self.high,
+            low=self.low,
+            close=self.close,
+            adj_close=self.close,
+            volume=self.volume,
+        )
+
+
+@dataclass(frozen=True)
+class StagedIntradaySnapshot:
+    run_directory: Path
+    metadata_path: Path
+    quotes_path: Path
+    completed_at: datetime
+    quotes_by_ticker: dict[str, StagedIntradayQuote]
+
+
+def discover_latest_intraday_snapshot(output_root: Path, run_date: date) -> StagedIntradaySnapshot | None:
+    date_root = Path(output_root) / run_date.isoformat()
+    candidates: list[tuple[datetime, Path, Path, Path]] = []
+    if not date_root.exists():
+        return None
+
+    for metadata_path in date_root.glob("window-*/run-*/collection-metadata.json"):
+        run_directory = metadata_path.parent
+        quotes_path = run_directory / "collected-quotes.json"
+        if not quotes_path.exists():
+            continue
+        metadata = _read_json(metadata_path)
+        completed_at_text = metadata.get("completed_at") or metadata.get("started_at")
+        if not completed_at_text:
+            continue
+        candidates.append((_parse_timestamp(completed_at_text), run_directory, metadata_path, quotes_path))
+
+    if not candidates:
+        return None
+
+    completed_at, run_directory, metadata_path, quotes_path = max(candidates, key=lambda item: item[0])
+    quotes_payload = _read_json(quotes_path)
+    quotes_by_ticker: dict[str, StagedIntradayQuote] = {}
+    for quote_payload in quotes_payload.get("quotes", []):
+        ticker = str(quote_payload["ticker"]).upper()
+        quotes_by_ticker[ticker] = StagedIntradayQuote(
+            ticker=ticker,
+            timestamp=_parse_timestamp(str(quote_payload["timestamp"])),
+            open=float(quote_payload["open"]),
+            high=float(quote_payload["high"]),
+            low=float(quote_payload["low"]),
+            close=float(quote_payload["close"]),
+            volume=float(quote_payload["volume"]),
+            source_path=quotes_path,
+        )
+
+    return StagedIntradaySnapshot(
+        run_directory=run_directory,
+        metadata_path=metadata_path,
+        quotes_path=quotes_path,
+        completed_at=completed_at,
+        quotes_by_ticker=quotes_by_ticker,
+    )
+
+
+def merge_history_with_staged_quote(history: list[DailyBar], staged_quote: StagedIntradayQuote | None) -> list[DailyBar]:
+    if not history or staged_quote is None:
+        return list(history)
+
+    merged = list(history)
+    staged_bar = staged_quote.as_daily_bar()
+    last_bar = merged[-1]
+    if staged_bar.trading_date < last_bar.trading_date:
+        return merged
+    if staged_bar.trading_date == last_bar.trading_date:
+        merged[-1] = staged_bar
+        return merged
+    merged.append(staged_bar)
+    return merged
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))

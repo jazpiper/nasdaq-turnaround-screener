@@ -20,6 +20,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT, help="Root directory for dated run outputs.")
     parser.add_argument("--dry-run", action="store_true", help="Run the screener without writing report artifacts.")
     parser.add_argument("--skip-install", action="store_true", help="Create/use .venv but skip dependency installation.")
+    parser.add_argument("--use-staged-intraday", action="store_true", help="Prefer latest staged intraday quotes for same-day enrichment when available.")
+    parser.add_argument("--intraday-output-root", type=Path, default=None, help="Override intraday artifact root used with --use-staged-intraday.")
     return parser.parse_args()
 
 
@@ -85,7 +87,15 @@ def update_latest_pointer(output_root: Path, target_dir: Path) -> Path:
     return latest_path
 
 
-def run_screener(python_path: Path, root: Path, run_date: str, output_dir: Path, dry_run: bool) -> int:
+def run_screener(
+    python_path: Path,
+    root: Path,
+    run_date: str,
+    output_dir: Path,
+    dry_run: bool,
+    use_staged_intraday: bool,
+    intraday_output_root: Path | None,
+) -> int:
     command = [
         str(python_path),
         "-m",
@@ -98,6 +108,10 @@ def run_screener(python_path: Path, root: Path, run_date: str, output_dir: Path,
     ]
     if dry_run:
         command.append("--dry-run")
+    if use_staged_intraday:
+        command.append("--use-staged-intraday")
+    if intraday_output_root is not None:
+        command.extend(["--intraday-output-root", str(intraday_output_root)])
 
     completed = subprocess.run(command, cwd=root)
     return completed.returncode
@@ -110,7 +124,15 @@ def main() -> int:
     output_dir = dated_output_dir(output_root, args.run_date)
 
     python_path = ensure_venv(root, skip_install=args.skip_install)
-    exit_code = run_screener(python_path, root, args.run_date, output_dir, args.dry_run)
+    exit_code = run_screener(
+        python_path,
+        root,
+        args.run_date,
+        output_dir,
+        args.dry_run,
+        args.use_staged_intraday,
+        args.intraday_output_root,
+    )
     if exit_code != 0:
         return exit_code
 

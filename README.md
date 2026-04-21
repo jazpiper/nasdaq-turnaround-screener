@@ -66,6 +66,7 @@ python -m screener.cli.main run --date 2026-04-21
 python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
 python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
 python scripts/run_daily.py --date 2026-04-21
+python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday
 pytest
 ```
 
@@ -86,6 +87,7 @@ pytest
 - `collect-window` 명령은 NASDAQ-100 정적 universe를 6개 window로 고정 분할하고, 각 window 내부에서는 ticker 요청을 분당 최대 8건 이하의 minute batch로 보수적으로 진행합니다.
 - 결과는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 저장되며, metadata에는 성공/실패, minute batch, remaining ticker, 이번 window에서 미수집된 ticker가 함께 기록됩니다.
 - 실무 흐름은 장중 collector가 staged snapshots를 쌓고, 장 마감 후 daily screener가 최종 후보/리포트를 생성하는 2단 구조입니다.
+- `--use-staged-intraday` 또는 `SCREENER_DAILY_INTRADAY_SOURCE_MODE=prefer-staged` 를 사용하면 해당 날짜의 가장 최근 staged intraday quotes를 찾아 마지막 일봉 bar를 같은 날짜 snapshot으로 교체하거나, 새 날짜면 append 합니다. artifacts가 없으면 기존 provider history로 그대로 fallback 합니다.
 - 예시:
   ```bash
   python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0

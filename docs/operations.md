@@ -41,12 +41,14 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id power-hour-2
 ### Cron-friendly daily runner
 ```bash
 python scripts/run_daily.py --date 2026-04-21
+python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday
 ```
 
 runner 동작:
 - `.venv` 가 없으면 생성합니다.
 - 기본적으로 `pip install -e '.[dev]'` 로 로컬 환경을 맞춥니다.
 - 결과를 `output/daily/YYYY-MM-DD/` 아래에 씁니다.
+- `--use-staged-intraday` 를 주면 `output/intraday/YYYY-MM-DD/window-*/run-*/` 에서 가장 최근 staged snapshot을 읽어 같은 날짜 latest quote를 우선 반영합니다. 필요 시 `--intraday-output-root` 또는 `SCREENER_INTRADAY_OUTPUT_ROOT` 로 root를 바꿀 수 있습니다.
 - 성공 시 `output/daily/latest` 를 가장 최근 run으로 갱신합니다.
 - 이미 의존성이 준비된 환경이면 `--skip-install` 로 설치 단계를 건너뛸 수 있습니다.
 

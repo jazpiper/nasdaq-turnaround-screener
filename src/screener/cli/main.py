@@ -29,14 +29,22 @@ def run(
     run_date: str = typer.Option(..., "--date", help="Run date in YYYY-MM-DD format."),
     dry_run: bool = typer.Option(False, help="Execute the scaffold without writing artifacts."),
     output_dir: Path = typer.Option(Path("output"), help="Directory for generated artifacts."),
+    use_staged_intraday: bool = typer.Option(False, "--use-staged-intraday", help="Prefer latest staged intraday quotes from output/intraday for same-day enrichment when available."),
+    intraday_output_root: Path | None = typer.Option(None, "--intraday-output-root", help="Override staged intraday artifact root used with --use-staged-intraday."),
 ) -> None:
     settings = get_settings(output_dir=output_dir)
+    if use_staged_intraday:
+        settings.daily_intraday_source_mode = "prefer-staged"
+    if intraday_output_root is not None:
+        settings.intraday_output_root = intraday_output_root
     context = build_context(run_date=parse_run_date(run_date), dry_run=dry_run, output_dir=settings.output_dir, run_mode=settings.default_run_mode, universe_name=settings.universe_name)
     result, artifacts = ScreenPipeline(settings=settings).run(context)
 
     typer.echo(f"Run date: {result.metadata.run_date.isoformat()}")
     typer.echo(f"Dry run: {result.metadata.dry_run}")
     typer.echo(f"Candidate count: {result.candidate_count}")
+    if settings.daily_intraday_source_mode == "prefer-staged":
+        typer.echo(f"Intraday source mode: {settings.daily_intraday_source_mode} ({settings.intraday_output_root})")
 
     if dry_run:
         typer.echo("Artifacts skipped (--dry-run).")

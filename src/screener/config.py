@@ -32,6 +32,7 @@ class Settings:
     intraday_window_ids: tuple[str, ...] = DEFAULT_INTRADAY_WINDOW_IDS
     intraday_output_root: Path = DEFAULT_INTRADAY_OUTPUT_ROOT
     intraday_collector_command: str | None = None
+    daily_intraday_source_mode: str = "disabled"
 
 
 def get_settings(
@@ -53,6 +54,7 @@ def get_settings(
         intraday_window_ids=parse_window_ids(os.getenv("SCREENER_INTRADAY_WINDOW_IDS")),
         intraday_output_root=Path(os.getenv("SCREENER_INTRADAY_OUTPUT_ROOT", DEFAULT_INTRADAY_OUTPUT_ROOT)),
         intraday_collector_command=_coerce_optional_string(os.getenv("SCREENER_INTRADAY_COLLECTOR_COMMAND")),
+        daily_intraday_source_mode=(os.getenv("SCREENER_DAILY_INTRADAY_SOURCE_MODE", "disabled").strip().lower() or "disabled"),
     )
     if output_dir is not None:
         settings.output_dir = Path(output_dir)

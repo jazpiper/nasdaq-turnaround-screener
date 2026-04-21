@@ -9,6 +9,7 @@ import pandas as pd
 from screener.config import Settings
 from screener.data import MarketDataFetcher, YFinanceDailyBarFetcher, build_market_data_fetcher
 from screener.indicators.technicals import add_indicator_columns, rolling_mean
+from screener.intraday_artifacts import discover_latest_intraday_snapshot, merge_history_with_staged_quote
 from screener.models import (
     CandidateResult,
     PipelineContext,
@@ -108,6 +109,52 @@ class YFinanceMarketDataProvider:
     @property
     def failures(self) -> dict[str, str]:
         return dict(self._failures_by_ticker)
+
+
+class PreferredIntradaySnapshotMarketDataProvider:
+    def __init__(self, base_provider: YFinanceMarketDataProvider, settings: Settings) -> None:
+        self.base_provider = base_provider
+        self.settings = settings
+        self.snapshot = None
+
+    def prepare(self, tickers: list[TickerInput], context: PipelineContext) -> None:
+        prepare = getattr(self.base_provider, "prepare", None)
+        if callable(prepare):
+            prepare(tickers, context)
+        self.snapshot = discover_latest_intraday_snapshot(self.settings.intraday_output_root, context.run_date)
+
+    def fetch_history(self, ticker: TickerInput, context: PipelineContext) -> pd.DataFrame:
+        history = self.base_provider.fetch_history(ticker, context)
+        if self.snapshot is None:
+            return history
+
+        staged_quote = self.snapshot.quotes_by_ticker.get(ticker.ticker)
+        if staged_quote is None:
+            return history
+
+        from screener.data.market_data import normalize_ohlcv_rows
+
+        rows = history.sort_values("date").to_dict("records")
+        bars = normalize_ohlcv_rows(ticker.ticker, rows)
+        merged_bars = merge_history_with_staged_quote(bars, staged_quote)
+        return pd.DataFrame(
+            [
+                {
+                    "date": bar.trading_date,
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "adj_close": bar.adj_close,
+                    "volume": bar.volume,
+                }
+                for bar in merged_bars
+            ]
+        )
+
+    @property
+    def failures(self) -> dict[str, str]:
+        return dict(getattr(self.base_provider, "failures", {}))
 
 
 class TechnicalIndicatorEngine:
@@ -261,7 +308,10 @@ def build_market_data_provider(settings: Settings) -> YFinanceMarketDataProvider
         twelve_data_api_key=settings.twelve_data_api_key,
         twelve_data_base_url=settings.twelve_data_base_url,
     )
-    return YFinanceMarketDataProvider(fetcher=fetcher)
+    provider = YFinanceMarketDataProvider(fetcher=fetcher)
+    if settings.daily_intraday_source_mode == "prefer-staged":
+        return PreferredIntradaySnapshotMarketDataProvider(provider, settings)
+    return provider
 
 
 def _close_improvement_streak(closes: list[float]) -> int:
