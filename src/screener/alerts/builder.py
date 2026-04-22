@@ -6,6 +6,7 @@ from screener.alerts.policy import (
     classify_candidate,
     determine_change_status,
     evaluate_daily_quality_gate,
+    evaluate_intraday_quality_gate,
     headline_reason,
     headline_risk,
     material_signature,
@@ -154,3 +155,87 @@ def build_daily_alert_document(
             digest=state.digest,
         )
     return document, AlertState(run_date=result.metadata.run_date.isoformat(), tickers=next_tickers, digest=digest_state)
+
+
+def build_intraday_alert_document(
+    result: ScreenRunResult,
+    *,
+    collection_result,
+    state: AlertState,
+    artifact_directory: str,
+    report_path: str,
+    metadata_path: str,
+) -> tuple[AlertDocument, AlertState]:
+    collection_quality_gate = evaluate_intraday_quality_gate(
+        collected_count=len(collection_result.collected),
+        failed_count=len(collection_result.failures),
+        skipped_due_to_credit_exhaustion_count=len(collection_result.skipped_due_to_credit_exhaustion),
+    )
+    document, next_state = build_daily_alert_document(
+        result,
+        state=state,
+        artifact_directory=artifact_directory,
+        report_path=report_path,
+        metadata_path=metadata_path,
+    )
+    quality_gate = _merge_quality_gates(document.summary.quality_gate, collection_quality_gate)
+
+    document.phase = "provisional"
+    document.run_mode = "intraday-provisional"
+    document.source.window_index = collection_result.plan.window_index
+    document.source.window_number = collection_result.plan.window_index + 1
+    document.source.total_windows = collection_result.plan.total_windows
+    document.summary.quality_gate = quality_gate
+
+    if quality_gate == "block":
+        document.events = []
+        document.summary.individual_event_count = 0
+        document.summary.digest_event_count = 0
+        return document, AlertState(
+            run_date=result.metadata.run_date.isoformat(),
+            tickers=dict(state.tickers),
+            digest=state.digest,
+        )
+
+    adjusted_events: list[AlertEvent] = []
+    for event in document.events:
+        updates = {
+            "phase": "provisional",
+            "group_key": event.group_key.removesuffix(":final") + ":provisional",
+            "message_summary": event.message_summary.replace(" final ", " provisional "),
+        }
+        if event.event_type == "digest_alert":
+            updates["dedupe_key"] = event.dedupe_key.replace(":final:digest:", ":provisional:digest:")
+        adjusted_events.append(event.model_copy(update=updates))
+    document.events = adjusted_events
+    document.summary.individual_event_count = len([event for event in adjusted_events if event.event_type == "ticker_alert"])
+    document.summary.digest_event_count = len([event for event in adjusted_events if event.event_type == "digest_alert"])
+
+    adjusted_tickers = {
+        ticker: ticker_state.model_copy(update={"last_phase": "provisional"})
+        for ticker, ticker_state in next_state.tickers.items()
+    }
+    adjusted_digest = next_state.digest
+    if adjusted_digest is not None and adjusted_digest.last_digest_dedupe_key is not None:
+        adjusted_digest = adjusted_digest.model_copy(
+            update={
+                "last_digest_dedupe_key": adjusted_digest.last_digest_dedupe_key.replace(
+                    ":final:digest:",
+                    ":provisional:digest:",
+                )
+            }
+        )
+
+    return document, AlertState(
+        run_date=result.metadata.run_date.isoformat(),
+        tickers=adjusted_tickers,
+        digest=adjusted_digest,
+    )
+
+
+def _merge_quality_gates(*gates: str) -> str:
+    if "block" in gates:
+        return "block"
+    if "warn" in gates:
+        return "warn"
+    return "pass"
