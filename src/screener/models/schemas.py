@@ -79,3 +79,5 @@ class RunArtifacts:
     markdown_path: Path | None = None
     json_report_path: Path | None = None
     metadata_path: Path | None = None
+    alert_events_path: Path | None = None
+    stable_alert_events_path: Path | None = None
