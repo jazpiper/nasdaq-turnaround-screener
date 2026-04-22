@@ -27,7 +27,6 @@ def build_daily_alert_document(
     events: list[AlertEvent] = []
     next_tickers: dict[str, TickerAlertState] = {}
     digest_members: list[dict[str, object]] = []
-    digest_dedupe_key: str | None = None
 
     for rank, candidate in enumerate(result.candidates, start=1):
         previous = state.tickers.get(candidate.ticker)
@@ -47,7 +46,7 @@ def build_daily_alert_document(
                     phase="final",
                     delivery_mode="single",
                     delivery_priority="high",
-                    severity="warning" if quality_gate == "warn" else "info",
+                    severity="warning",
                     dedupe_key=dedupe_key,
                     group_key=f"nasdaq-turnaround:{result.metadata.run_date.isoformat()}:final",
                     change_status=change_status,
@@ -64,6 +63,7 @@ def build_daily_alert_document(
                         "indicator_snapshot": candidate.indicator_snapshot or {},
                         "headline_reason": headline_reason(candidate),
                         "headline_risk": headline_risk(candidate),
+                        "source_candidate_ref": f"#/candidates/{rank - 1}",
                     },
                 )
             )
@@ -121,6 +121,8 @@ def build_daily_alert_document(
             last_digest_dedupe_key=digest_dedupe_key,
         )
 
+    emitted_events = [] if quality_gate == "block" else events
+
     document = AlertDocument(
         schema_version=1,
         delivery_contract="openclaw-alert-events-v1",
@@ -138,11 +140,17 @@ def build_daily_alert_document(
         ),
         summary=AlertSummary(
             eligible_candidate_count=len([candidate for candidate in result.candidates if candidate.score >= 45]),
-            individual_event_count=len([event for event in events if event.event_type == "ticker_alert"]),
-            digest_event_count=len([event for event in events if event.event_type == "digest_alert"]),
+            individual_event_count=len([event for event in emitted_events if event.event_type == "ticker_alert"]),
+            digest_event_count=len([event for event in emitted_events if event.event_type == "digest_alert"]),
             suppressed_candidate_count=len(result.candidates) - len(next_tickers),
             quality_gate=quality_gate,
         ),
-        events=[] if quality_gate == "block" else events,
+        events=emitted_events,
     )
+    if quality_gate == "block":
+        return document, AlertState(
+            run_date=result.metadata.run_date.isoformat(),
+            tickers=dict(state.tickers),
+            digest=state.digest,
+        )
     return document, AlertState(run_date=result.metadata.run_date.isoformat(), tickers=next_tickers, digest=digest_state)

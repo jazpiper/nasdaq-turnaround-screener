@@ -218,12 +218,14 @@ def test_pipeline_writes_daily_alert_sidecar(tmp_path: Path) -> None:
     payload = json.loads(artifacts.alert_events_path.read_text(encoding="utf-8"))
     assert payload["phase"] == "final"
     assert payload["summary"]["quality_gate"] == "block"
+    assert payload["summary"]["individual_event_count"] == 0
+    assert payload["summary"]["digest_event_count"] == 0
     assert payload["events"] == []
 
     state_path = tmp_path / "alerts" / "2026-04-21" / "alert-state.json"
     state = load_alert_state(state_path)
     assert state.run_date == "2026-04-21"
-    assert state.tickers
+    assert state.tickers == {}
 
 
 def test_build_market_data_provider_uses_settings_choice() -> None:
