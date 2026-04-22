@@ -8,6 +8,7 @@ from screener.alerts.policy import (
     determine_change_status,
     evaluate_daily_quality_gate,
     evaluate_intraday_quality_gate,
+    material_signature,
 )
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown
 
@@ -52,6 +53,12 @@ def test_classify_candidate_marks_high_score_state_change_as_single() -> None:
     candidate = make_candidate()
 
     assert classify_candidate(candidate, rank=1, change_status="new") == "single"
+
+
+def test_material_signature_includes_score_and_rank() -> None:
+    candidate = make_candidate(score=66)
+
+    assert material_signature(candidate, rank=3).startswith("66|3|")
 
 
 def test_classify_candidate_requires_reversal_and_bottom_reason_mix() -> None:

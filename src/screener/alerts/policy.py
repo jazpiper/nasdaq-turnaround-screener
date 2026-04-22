@@ -48,10 +48,12 @@ def headline_risk(candidate: CandidateResult) -> str:
     return candidate.risks[0] if candidate.risks else "n/a"
 
 
-def material_signature(candidate: CandidateResult) -> str:
+def material_signature(candidate: CandidateResult, *, rank: int) -> str:
     snapshot = candidate.indicator_snapshot or {}
     return "|".join(
         [
+            str(candidate.score),
+            str(rank),
             headline_reason(candidate),
             headline_risk(candidate),
             str(snapshot.get("earnings_penalty", 0)),
@@ -91,7 +93,7 @@ def determine_change_status(
     previous_headline_risk = previous_state.get("last_headline_risk")
     previous_earnings_penalty = int(previous_state.get("last_earnings_penalty", 0) or 0)
     previous_volatility_penalty = int(previous_state.get("last_volatility_penalty", 0) or 0)
-    current_signature = material_signature(candidate)
+    current_signature = material_signature(candidate, rank=rank)
     current_headline_reason = headline_reason(candidate)
     current_headline_risk = headline_risk(candidate)
     snapshot = candidate.indicator_snapshot or {}
@@ -104,8 +106,6 @@ def determine_change_status(
         return "upgraded"
     if score_delta >= 5 or rank_delta >= 2:
         return "material_change"
-    if previous_signature is not None and previous_signature == current_signature:
-        return "unchanged"
     if (
         previous_signature is not None
         and (
@@ -129,10 +129,6 @@ def determine_change_status(
             or previous_volatility_penalty != current_volatility_penalty
         ):
             return "material_change"
-    if phase == "final" and previous_signature is not None and previous_signature != current_signature:
-        return "material_change"
-    if phase == "final" and previous_signature is None:
-        return "unchanged"
     return "unchanged"
 
 
