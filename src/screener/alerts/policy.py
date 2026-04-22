@@ -17,6 +17,14 @@ _REVERSAL_REASON_HINTS = (
     "전일 몸통을 감싸는 bullish engulfing 유사 패턴",
 )
 _OVERSOLD_REASON_HINTS = ("BB 하단", "과매도", "저점", "재진입")
+_EXTENDED_STATE_KEYS = {
+    "last_score",
+    "last_rank",
+    "last_headline_reason",
+    "last_headline_risk",
+    "last_earnings_penalty",
+    "last_volatility_penalty",
+}
 
 
 def evaluate_daily_quality_gate(metadata: RunMetadata) -> str:
@@ -75,6 +83,10 @@ def _has_single_reason_mix(candidate: CandidateResult) -> bool:
     return has_reversal_reason and has_oversold_or_bottom_reason
 
 
+def _has_extended_previous_state(previous_state: dict[str, str]) -> bool:
+    return any(key in previous_state for key in _EXTENDED_STATE_KEYS)
+
+
 def determine_change_status(
     candidate: CandidateResult,
     *,
@@ -101,11 +113,14 @@ def determine_change_status(
     current_volatility_penalty = int(snapshot.get("volatility_penalty", 0) or 0)
     score_delta = abs(candidate.score - previous_score)
     rank_delta = abs(rank - previous_rank)
+    has_extended_previous_state = _has_extended_previous_state(previous_state)
 
     if previous_tier == "digest" and rank <= 5 and candidate.score >= 60:
         return "upgraded"
     if score_delta >= 5 or rank_delta >= 2:
         return "material_change"
+    if not has_extended_previous_state:
+        return "unchanged"
     if (
         previous_signature is not None
         and (
