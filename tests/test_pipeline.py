@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from screener.alerts.state import load_alert_state
 from screener.config import Settings
 from screener.data.earnings import EarningsInfo
 from screener.models import TickerInput
@@ -179,6 +181,49 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert artifacts.metadata_path == tmp_path / "run-metadata.json"
     assert artifacts.markdown_path.exists()
     assert "Data Failures" in artifacts.markdown_path.read_text(encoding="utf-8")
+
+
+def test_pipeline_writes_daily_alert_sidecar(tmp_path: Path) -> None:
+    histories = {
+        "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
+        "MSFT": make_bars_from_history("MSFT", make_history(start_close=420.0, final_volume=2_000_000.0)),
+    }
+    provider = YFinanceMarketDataProvider(
+        fetcher=StubFetcher(histories, failed_tickers={"NVDA": "No price rows returned"})
+    )
+    output_dir = tmp_path / "daily"
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=output_dir),
+        universe_provider=StubUniverseProvider(),
+        market_data_provider=provider,
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=RankedCandidateScorer(),
+        earnings_calendar_provider=StubEarningsProvider(),
+        benchmark_market_data_provider=make_benchmark_provider(),
+    )
+    context = build_context(
+        run_date=date(2026, 4, 21),
+        generated_at=datetime(2026, 4, 21, 7, 30, tzinfo=timezone.utc),
+        output_dir=output_dir,
+    )
+
+    result, artifacts = pipeline.run(context)
+
+    assert result.candidate_count >= 1
+    assert artifacts.alert_events_path == output_dir / "alert-events.json"
+    assert artifacts.stable_alert_events_path == tmp_path / "latest" / "alert-events.json"
+    assert artifacts.alert_events_path.exists()
+    assert artifacts.stable_alert_events_path.exists()
+
+    payload = json.loads(artifacts.alert_events_path.read_text(encoding="utf-8"))
+    assert payload["phase"] == "final"
+    assert payload["summary"]["quality_gate"] == "block"
+    assert payload["events"] == []
+
+    state_path = tmp_path / "alerts" / "2026-04-21" / "alert-state.json"
+    state = load_alert_state(state_path)
+    assert state.run_date == "2026-04-21"
+    assert state.tickers
 
 
 def test_build_market_data_provider_uses_settings_choice() -> None:
