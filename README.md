@@ -61,20 +61,25 @@ artifact 필드와 운영 해석 기준은 `docs/architecture.md` 와 `docs/oper
 ## Project Layout
 ```text
 src/screener/
-  _pipeline/       internal daily pipeline modules
-  backtest.py      historical candidate replay / forward-return skeleton
-  cli/            CLI entrypoint
-  collector.py    staged intraday collection
-  data/           market data fetch / normalize
-  indicators/     technical indicator calculation
-  pipeline.py     public daily pipeline facade
-  reporting/      markdown / json report generation
-  scoring/        candidate filter and ranking
-  storage/        file and Oracle SQL persistence
-  universe/       NASDAQ-100 universe loader
-tests/            pytest suite
-scripts/          cron-friendly daily / intraday runners
-docs/             current-state documentation
+  _pipeline/          internal daily pipeline modules (contracts, snapshot, core, providers, context)
+  backtest.py         historical candidate replay / forward-return skeleton
+  cli/                CLI entrypoint
+  collector.py        staged intraday collection
+  config.py           settings, environment variable resolution, OpenClaw secrets loader
+  data/               market data fetch / normalize
+  indicators/         technical indicator calculation
+  intraday_artifacts.py  intraday artifact reader used by daily merge path
+  intraday_ops.py     slot id normalization, collector command template assembly
+  models/             Pydantic schemas for data structures
+  pipeline.py         public daily pipeline facade
+  reporting/          markdown / json report generation
+  scoring/            candidate filter and ranking
+  secrets.py          OpenClaw secrets file reader
+  storage/            file and Oracle SQL persistence
+  universe/           NASDAQ-100 universe loader
+tests/               pytest suite
+scripts/             cron-friendly daily / intraday runners
+docs/                current-state documentation
 ```
 
 ## Documentation

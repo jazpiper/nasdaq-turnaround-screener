@@ -57,10 +57,14 @@ CLI
 ## 5. Main Modules
 - `src/screener/cli/main.py`: `run`, `collect-window`, `init-oracle-schema`, `backtest`
 - `src/screener/pipeline.py`: 공개 facade
-- `src/screener/_pipeline/`: provider, context merge, snapshot, orchestration
+- `src/screener/_pipeline/`: provider, context merge, snapshot, orchestration (`contracts.py` 에 ABC 정의)
 - `src/screener/backtest.py`: historical replay와 forward-return artifact 생성
 - `src/screener/collector.py`: intraday 계획 생성, 분당 throttle, daily-credit exhaustion short-circuit, artifact write
 - `src/screener/intraday_ops.py`: slot id normalization과 cron/OpenClaw용 collector command template 조립
+- `src/screener/intraday_artifacts.py`: daily merge 경로에서 staged intraday artifact를 읽는 reader
+- `src/screener/config.py`: 설정·환경변수 해석·OpenClaw secrets 로딩
+- `src/screener/secrets.py`: OpenClaw secrets file reader
+- `src/screener/models/schemas.py`: pipeline 전반에서 쓰는 Pydantic 데이터 모델
 - `src/screener/data/`: `yfinance` / Twelve Data fetch와 OHLCV normalization
 - `src/screener/indicators/technicals.py`: BB, RSI, SMA, ATR, weekly context, candle metrics 계산
 - `src/screener/scoring/ranking.py`: hard filter, subscore, penalty, ranking
