@@ -4,6 +4,8 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from screener.alerts.builder import build_intraday_alert_document
+from screener.alerts.state import AlertState
 from screener.alerts.state import load_alert_state
 from screener.collector import (
     CollectedQuote,
@@ -13,6 +15,7 @@ from screener.collector import (
     TwelveDataWindowCollector,
 )
 from screener.config import Settings
+from screener.models import CandidateResult, RunMetadata, ScoreBreakdown, ScreenRunResult
 
 
 def test_write_provisional_alerts_writes_run_and_stable_sidecars(tmp_path: Path, monkeypatch) -> None:
@@ -132,3 +135,77 @@ def test_write_provisional_alerts_writes_run_and_stable_sidecars(tmp_path: Path,
 
     state = load_alert_state(tmp_path / "alerts" / "2026-04-21" / "alert-state.json")
     assert state.tickers["AAPL"].last_phase == "provisional"
+
+
+def test_build_intraday_alert_document_elevates_digest_severity_on_warn_collection() -> None:
+    result = ScreenRunResult(
+        metadata=RunMetadata(
+            run_date=date(2026, 4, 21),
+            generated_at=datetime(2026, 4, 21, 15, 30, tzinfo=timezone.utc),
+            artifact_directory=Path("output/intraday/2026-04-21/window-01-of-01/run-20260421T153000Z"),
+            run_mode="intraday-provisional",
+            failed_ticker_count=0,
+            bars_nonempty_count=100,
+            latest_bar_date_mismatch_count=0,
+            insufficient_history_count=0,
+        ),
+        candidates=[
+            CandidateResult(
+                ticker="AAPL",
+                name="Apple Inc.",
+                score=55,
+                subscores=ScoreBreakdown(oversold=20, bottom_context=15, reversal=10, volume=5, market_context=5),
+                reasons=["BB 하단 근처 또는 재진입 구간", "최근 20일 저점 부근"],
+                risks=["중기 추세는 아직 하락 압력일 수 있음"],
+                indicator_snapshot={"earnings_penalty": 0, "volatility_penalty": 0},
+                generated_at=datetime(2026, 4, 21, 15, 30, tzinfo=timezone.utc),
+            )
+        ],
+    )
+    collection_result = CollectionResult(
+        plan=CollectionPlan(
+            window_index=0,
+            total_windows=1,
+            window_tickers=[f"T{i:02d}" for i in range(50)],
+            minute_batches=[],
+            remaining_tickers=[],
+            max_credits_per_minute=5,
+        ),
+        collected=[],
+        successes=[],
+        failures={},
+        skipped_due_to_credit_exhaustion=[],
+        artifacts=CollectionArtifacts(run_directory=None, metadata_path=None, quotes_path=None),
+    )
+    collection_result = CollectionResult(
+        plan=collection_result.plan,
+        collected=[
+            CollectedQuote(
+                ticker=f"T{i:02d}",
+                timestamp="2026-04-21T15:29:00+00:00",
+                open=111.0,
+                high=113.0,
+                low=109.0,
+                close=112.0,
+                volume=3210000.0,
+            )
+            for i in range(50)
+        ],
+        successes=[f"T{i:02d}" for i in range(50)],
+        failures={},
+        skipped_due_to_credit_exhaustion=[],
+        artifacts=CollectionArtifacts(run_directory=None, metadata_path=None, quotes_path=None),
+    )
+
+    document, _ = build_intraday_alert_document(
+        result,
+        collection_result=collection_result,
+        state=AlertState(),
+        artifact_directory="output/intraday/2026-04-21/window-01-of-01/run-20260421T153000Z",
+        report_path="output/intraday/2026-04-21/window-01-of-01/run-20260421T153000Z/collected-quotes.json",
+        metadata_path="output/intraday/2026-04-21/window-01-of-01/run-20260421T153000Z/collection-metadata.json",
+    )
+
+    assert document.summary.quality_gate == "warn"
+    assert [event.event_type for event in document.events] == ["digest_alert"]
+    assert document.events[0].severity == "warning"

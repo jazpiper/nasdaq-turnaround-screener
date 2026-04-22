@@ -204,6 +204,8 @@ def build_intraday_alert_document(
             "group_key": event.group_key.removesuffix(":final") + ":provisional",
             "message_summary": event.message_summary.replace(" final ", " provisional "),
         }
+        if quality_gate == "warn":
+            updates["severity"] = "warning"
         if event.event_type == "digest_alert":
             updates["dedupe_key"] = event.dedupe_key.replace(":final:digest:", ":provisional:digest:")
         adjusted_events.append(event.model_copy(update=updates))
