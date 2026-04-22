@@ -54,6 +54,12 @@ def test_classify_candidate_marks_high_score_state_change_as_single() -> None:
     assert classify_candidate(candidate, rank=1, change_status="new") == "single"
 
 
+def test_classify_candidate_requires_reversal_and_bottom_reason_mix() -> None:
+    candidate = make_candidate(reasons=["BB 하단 근처 또는 재진입 구간", "최근 20일 저점 부근"])
+
+    assert classify_candidate(candidate, rank=1, change_status="new") == "digest"
+
+
 def test_classify_candidate_suppresses_high_earnings_penalty() -> None:
     candidate = make_candidate(score=72)
     candidate.indicator_snapshot["earnings_penalty"] = 8
@@ -66,6 +72,12 @@ def test_determine_change_status_marks_small_recompute_as_unchanged() -> None:
     previous = {
         "last_delivery_tier": "single",
         "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+        "last_score": "64",
+        "last_rank": "1",
+        "last_headline_reason": "BB 하단 근처 또는 재진입 구간",
+        "last_headline_risk": "중기 추세는 아직 하락 압력일 수 있음",
+        "last_earnings_penalty": "0",
+        "last_volatility_penalty": "0",
         "last_phase": "provisional",
         "last_emitted_at": "2026-04-22T15:30:00+00:00",
         "last_dedupe_key": "key-aapl",
@@ -79,12 +91,56 @@ def test_determine_change_status_keeps_small_score_and_rank_nudge_unchanged() ->
     previous = {
         "last_delivery_tier": "single",
         "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+        "last_score": "64",
+        "last_rank": "1",
+        "last_headline_reason": "BB 하단 근처 또는 재진입 구간",
+        "last_headline_risk": "중기 추세는 아직 하락 압력일 수 있음",
+        "last_earnings_penalty": "0",
+        "last_volatility_penalty": "0",
         "last_phase": "provisional",
         "last_emitted_at": "2026-04-22T15:30:00+00:00",
         "last_dedupe_key": "key-aapl",
     }
 
     assert determine_change_status(candidate, rank=2, phase="final", previous_state=previous) == "unchanged"
+
+
+def test_determine_change_status_marks_large_score_delta_as_material_change() -> None:
+    candidate = make_candidate(score=70)
+    previous = {
+        "last_delivery_tier": "single",
+        "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+        "last_score": "64",
+        "last_rank": "1",
+        "last_headline_reason": "BB 하단 근처 또는 재진입 구간",
+        "last_headline_risk": "중기 추세는 아직 하락 압력일 수 있음",
+        "last_earnings_penalty": "0",
+        "last_volatility_penalty": "0",
+        "last_phase": "provisional",
+        "last_emitted_at": "2026-04-22T15:30:00+00:00",
+        "last_dedupe_key": "key-aapl",
+    }
+
+    assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "material_change"
+
+
+def test_determine_change_status_marks_large_rank_delta_as_material_change() -> None:
+    candidate = make_candidate(score=64)
+    previous = {
+        "last_delivery_tier": "single",
+        "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+        "last_score": "64",
+        "last_rank": "1",
+        "last_headline_reason": "BB 하단 근처 또는 재진입 구간",
+        "last_headline_risk": "중기 추세는 아직 하락 압력일 수 있음",
+        "last_earnings_penalty": "0",
+        "last_volatility_penalty": "0",
+        "last_phase": "provisional",
+        "last_emitted_at": "2026-04-22T15:30:00+00:00",
+        "last_dedupe_key": "key-aapl",
+    }
+
+    assert determine_change_status(candidate, rank=3, phase="final", previous_state=previous) == "material_change"
 
 
 def test_evaluate_intraday_quality_gate_warns_on_partial_collection() -> None:
