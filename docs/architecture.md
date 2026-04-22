@@ -40,7 +40,8 @@ CLI / runner
 장중 수집은 보강 데이터 역할입니다. 장 마감 후 daily run이 가장 최근 staged quote를 읽어 같은 날짜 일봉 bar를 교체하거나 append 합니다.
 
 ## 3. Artifact Consumers
-- 운영 오케스트레이터가 읽는 기본 진입점은 `output/daily/latest` 입니다.
+- 운영 오케스트레이터가 읽는 기본 daily consumer entrypoint는 `output/daily/latest/alert-events.json` 입니다.
+- provisional intraday consumer entrypoint는 `output/intraday/YYYY-MM-DD/latest-alert-events.json` 입니다.
 - same-day staged intraday merge는 `collection-metadata.json` 전체를 해석하지 않고, 각 run의 `completed_at` 또는 `started_at` 으로 최신 snapshot을 고른 뒤 `collected-quotes.json` 을 읽습니다.
 - `collection-metadata.json` 의 `failures`, `skipped_due_to_credit_exhaustion` 같은 필드는 운영 해석과 Oracle 적재에는 쓰이지만, 현재 이 저장소 안의 daily merge 경로가 직접 소비하지는 않습니다.
 - Oracle `intraday_collection_runs` / `intraday_collection_quotes` 는 현재 이 저장소 안에서는 write-only persistence 경로입니다.

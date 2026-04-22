@@ -32,7 +32,7 @@
 ## 4. Downstream Consumer Check
 이 저장소와 같은 머신의 형제 프로젝트까지 확인한 결과, 현재 확인된 local consumer 경계는 아래와 같습니다.
 
-- OpenClaw의 기본 소비 진입점은 `output/daily/latest/`
+- OpenClaw의 기본 소비 진입점은 `output/daily/latest/alert-events.json`
 - same-day staged merge는 `collection-metadata.json` 의 `completed_at` 또는 `started_at` 만 이용해 최신 run을 고르고, 실제 데이터는 `collected-quotes.json` 에서 읽음
 - `collection-metadata.json` 의 `failures` / `skipped_due_to_credit_exhaustion` 를 직접 해석하는 local consumer는 현재 없음
 - Oracle `intraday_collection_runs` / `intraday_collection_quotes` 를 조회하는 local reader도 현재 없음

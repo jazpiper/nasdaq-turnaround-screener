@@ -52,9 +52,10 @@ python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-
 ```
 
 ## Output Layout
-- `output/daily/YYYY-MM-DD/`: `daily-report.md`, `daily-report.json`, `run-metadata.json`
-- `output/daily/latest/`: 가장 최근 daily run 포인터
-- `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../`: staged intraday metadata와 quote artifact (`run_intraday_window.py` 기본값은 full-universe 수집이므로 보통 `window-01-of-01`)
+- `output/daily/YYYY-MM-DD/`: `daily-report.md`, `daily-report.json`, `run-metadata.json`, `alert-events.json`
+- `output/daily/latest/`: 가장 최근 daily run 포인터와 stable daily consumer path (`alert-events.json`)
+- `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../`: staged intraday metadata, quote artifact, provisional `alert-events.json` (`run_intraday_window.py` 기본값은 full-universe 수집이므로 보통 `window-01-of-01`)
+- `output/intraday/YYYY-MM-DD/latest-alert-events.json`: 같은 거래일의 최신 provisional intraday consumer entrypoint
 
 artifact 필드와 운영 해석 기준은 `docs/architecture.md` 와 `docs/operations.md` 를 기준 문서로 봅니다.
 
@@ -92,4 +93,4 @@ docs/                current-state documentation
 - `scripts/run_intraday_window.py` 는 slot 이름(`open-1` 등)을 스케줄 라벨로만 사용하고, 각 실행마다 NASDAQ-100 전체를 다시 수집합니다.
 - 기본 wrapper command는 Twelve Data free plan 대비 버퍼를 더 두기 위해 `max_credits_per_minute=5` 를 사용합니다.
 - Twelve Data가 일일 크레딧 소진 응답을 주면 해당 slot의 추가 ticker 호출을 즉시 중단하고, 남은 planned ticker는 `skipped_due_to_credit_exhaustion` 으로 metadata에 기록합니다.
-- OpenClaw나 외부 오케스트레이터의 기본 진입점은 intraday artifact가 아니라 `output/daily/latest/` 입니다.
+- OpenClaw나 외부 오케스트레이터의 기본 daily consumer entrypoint는 `output/daily/latest/alert-events.json` 입니다.
