@@ -6,6 +6,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from screener.alerts import AlertSidecarError
 from screener.backtest import BacktestArtifacts
 from screener.cli.main import app
 from screener.models import CandidateResult, RunArtifacts, RunMetadata, ScreenRunResult, ScoreBreakdown
@@ -208,6 +209,26 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert payload["candidate_count"] == 1
     assert payload["candidates"][0]["ticker"] == "AAPL"
     assert payload["candidates"][0]["name"] == "Apple Inc."
+
+
+def test_run_exits_nonzero_when_alert_sidecar_generation_fails(tmp_path: Path, monkeypatch) -> None:
+    class FailingAlertPipeline(StubPipeline):
+        def run(self, context):
+            result, artifacts = super().run(context)
+            if not context.dry_run:
+                raise AlertSidecarError("alert sidecar failed")
+            return result, artifacts
+
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", FailingAlertPipeline)
+
+    result = runner.invoke(
+        app,
+        ["run", "--date", "2026-04-21", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Alert sidecar generation failed: alert sidecar failed" in (result.stdout + result.stderr)
+    assert (tmp_path / "daily-report.json").exists()
 
 
 def test_run_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:

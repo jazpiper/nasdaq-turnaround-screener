@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 
+from screener.alerts import AlertSidecarError
 from screener.backtest import HistoricalBacktestRunner
 from screener.collector import CollectionResult, TwelveDataWindowCollector
 from screener.config import Settings, get_settings
@@ -62,7 +63,11 @@ def run(
     if persist_oracle_sql:
         settings.oracle_sql_enabled = True
     context = build_context(run_date=parse_run_date(run_date), dry_run=dry_run, output_dir=settings.output_dir, run_mode=settings.default_run_mode, universe_name=settings.universe_name)
-    result, artifacts = ScreenPipeline(settings=settings).run(context)
+    try:
+        result, artifacts = ScreenPipeline(settings=settings).run(context)
+    except AlertSidecarError as exc:
+        typer.echo(f"Alert sidecar generation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     typer.echo(f"Run date: {result.metadata.run_date.isoformat()}")
     typer.echo(f"Dry run: {result.metadata.dry_run}")

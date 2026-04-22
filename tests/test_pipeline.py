@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from screener.alerts import AlertSidecarError
 from screener.alerts.state import load_alert_state
 from screener.config import Settings
 from screener.data.earnings import EarningsInfo
@@ -226,6 +227,39 @@ def test_pipeline_writes_daily_alert_sidecar(tmp_path: Path) -> None:
     state = load_alert_state(state_path)
     assert state.run_date == "2026-04-21"
     assert state.tickers == {}
+
+
+def test_pipeline_raises_alert_sidecar_error_after_writing_raw_artifacts(tmp_path: Path, monkeypatch) -> None:
+    histories = {
+        "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
+    }
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=tmp_path),
+        universe_provider=type("SingleTickerUniverse", (), {"load_universe": lambda self, context: [TickerInput(ticker="AAPL")]})(),
+        market_data_provider=YFinanceMarketDataProvider(fetcher=StubFetcher(histories)),
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=RankedCandidateScorer(),
+        benchmark_market_data_provider=make_benchmark_provider(),
+    )
+    context = build_context(
+        run_date=date(2026, 4, 21),
+        generated_at=datetime(2026, 4, 21, 7, 30, tzinfo=timezone.utc),
+        output_dir=tmp_path,
+    )
+
+    def fail_write_alert_document(*args, **kwargs):
+        raise RuntimeError("alert sidecar failed")
+
+    monkeypatch.setattr("screener._pipeline.core.write_alert_document", fail_write_alert_document)
+
+    with pytest.raises(AlertSidecarError, match="alert sidecar failed"):
+        pipeline.run(context)
+
+    assert (tmp_path / "daily-report.md").exists()
+    assert (tmp_path / "daily-report.json").exists()
+
+    metadata = json.loads((tmp_path / "run-metadata.json").read_text(encoding="utf-8"))
+    assert "Alert sidecar generation failed: alert sidecar failed" in metadata["notes"]
 
 
 def test_build_market_data_provider_uses_settings_choice() -> None:
