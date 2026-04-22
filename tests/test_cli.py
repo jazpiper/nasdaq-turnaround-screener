@@ -26,6 +26,13 @@ class StubPipeline:
                 run_mode=context.run_mode,
                 dry_run=context.dry_run,
                 artifact_directory=context.output_dir,
+                planned_ticker_count=100,
+                successful_ticker_count=99,
+                failed_ticker_count=1,
+                bars_nonempty_count=99,
+                latest_bar_date_mismatch_count=0,
+                insufficient_history_count=1,
+                planned_tickers=["AAPL", "NVDA"],
                 data_failures=["NVDA: No price rows returned"],
                 notes=["stubbed test run"],
             ),
@@ -54,11 +61,31 @@ class StubPipeline:
             context.output_dir.mkdir(parents=True, exist_ok=True)
             artifacts.markdown_path.write_text("# Report\n\nAAPL\n", encoding="utf-8")
             artifacts.json_report_path.write_text(
-                json.dumps({"date": context.run_date.isoformat(), "candidate_count": 1, "candidates": [{"ticker": "AAPL", "name": "Apple Inc."}]}),
+                json.dumps({
+                    "date": context.run_date.isoformat(),
+                    "planned_ticker_count": result.metadata.planned_ticker_count,
+                    "successful_ticker_count": result.metadata.successful_ticker_count,
+                    "failed_ticker_count": result.metadata.failed_ticker_count,
+                    "bars_nonempty_count": result.metadata.bars_nonempty_count,
+                    "latest_bar_date_mismatch_count": result.metadata.latest_bar_date_mismatch_count,
+                    "insufficient_history_count": result.metadata.insufficient_history_count,
+                    "planned_tickers": result.metadata.planned_tickers,
+                    "candidate_count": 1,
+                    "candidates": [{"ticker": "AAPL", "name": "Apple Inc."}],
+                }),
                 encoding="utf-8",
             )
             artifacts.metadata_path.write_text(
-                json.dumps({"data_failures": result.metadata.data_failures}),
+                json.dumps({
+                    "planned_ticker_count": result.metadata.planned_ticker_count,
+                    "successful_ticker_count": result.metadata.successful_ticker_count,
+                    "failed_ticker_count": result.metadata.failed_ticker_count,
+                    "bars_nonempty_count": result.metadata.bars_nonempty_count,
+                    "latest_bar_date_mismatch_count": result.metadata.latest_bar_date_mismatch_count,
+                    "insufficient_history_count": result.metadata.insufficient_history_count,
+                    "planned_tickers": result.metadata.planned_tickers,
+                    "data_failures": result.metadata.data_failures,
+                }),
                 encoding="utf-8",
             )
         else:
@@ -171,6 +198,13 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["date"] == "2026-04-21"
+    assert payload["planned_ticker_count"] == 100
+    assert payload["successful_ticker_count"] == 99
+    assert payload["failed_ticker_count"] == 1
+    assert payload["bars_nonempty_count"] == 99
+    assert payload["latest_bar_date_mismatch_count"] == 0
+    assert payload["insufficient_history_count"] == 1
+    assert payload["planned_tickers"] == ["AAPL", "NVDA"]
     assert payload["candidate_count"] == 1
     assert payload["candidates"][0]["ticker"] == "AAPL"
     assert payload["candidates"][0]["name"] == "Apple Inc."

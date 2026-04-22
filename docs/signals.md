@@ -25,6 +25,9 @@
 최종 점수는 아래처럼 계산됩니다.
 
 - `total_score = sum(subscores) - earnings_penalty - volatility_penalty`
+- 총점이 `0` 이면 후보 리스트에는 남기지 않고 제외합니다. 현재 최소 총점 cutoff는 `1` 입니다.
+- earnings overlay와 volatility overlay는 서로 독립적으로 계산되고, 두 overlay 사이에서는 penalty가 합산 차감됩니다.
+- 같은 overlay 안에서 여러 조건이 동시에 맞아도 penalty는 모두 더하지 않고 **가장 큰 값 하나만** 적용합니다.
 - 총점과 각 subscore는 모두 정수(`int`)로 관리됩니다.
 - threshold 상수는 `src/screener/scoring/thresholds.py` 에 모여 있습니다.
 
@@ -45,6 +48,8 @@
 해석:
 - 20일 저점에 가까울수록 가산
 - 60일 저점과도 멀지 않으면 추가 가산
+- `최근 20일 저점 부근` reason은 `distance_to_20d_low <= 3.0` 일 때 붙습니다.
+- `중기 저점권과도 멀지 않음` reason은 `distance_to_60d_low <= 8.0` 일 때 붙습니다.
 
 대표 reason:
 - `최근 20일 저점 부근`
@@ -70,6 +75,7 @@
 - 너무 약한 거래량은 risk
 - 평균 부근이면 과열되지 않은 반등 시도
 - 크게 높으면 반등 시도에 거래량 유입으로 해석
+- 현재 구현은 선형 점수 후 `0..15` 로 clip 하므로, `volume_ratio_20d >= 1.6` 부근부터는 추가 점수 차이가 더 커지지 않습니다.
 
 대표 reason / risk:
 - `거래량이 20일 평균 대비 과열되지 않음`
@@ -87,10 +93,15 @@
 - `relative_strength_score`
 
 현재 구현 로직:
-- severe damage 조건이면 후보에서 제외
-- 약한 훼손이면 penalty만 부여
-- 기본값은 `market_context_score = 10.0 - weekly_trend_penalty`
-- 여기에 QQQ 대비 상대강도를 추가로 반영
+- severe damage 조건이면 후보에서 제외합니다.
+  - 현재 severe damage는 `weekly_close < weekly_sma_10 * 0.85`, `weekly_sma_5 < weekly_sma_10`, `weekly_close_improving == false` 조합일 때 `true` 가 됩니다.
+- 약한 훼손이면 `weekly_trend_penalty` 만 부여합니다.
+  - `weekly_close < weekly_sma_10 * 0.9` 이고 `weekly_sma_5 < weekly_sma_10` 이며 개선 중이 아니면 penalty `6`
+  - `weekly_close < weekly_sma_10 * 0.95` 이고 `weekly_sma_5 < weekly_sma_10` 이며 개선 중이 아니면 penalty `3`
+- provider / indicator 단계가 먼저 `market_context_score = 10.0 - weekly_trend_penalty` baseline을 채웁니다.
+- scoring 단계는 이 baseline에 QQQ 대비 상대강도 bonus / penalty를 추가로 반영합니다.
+- `market_context_score` 가 snapshot에 없으면 scoring은 fallback `10.0` 을 사용해 중립으로 처리합니다.
+- `rel_strength_60d_vs_qqq >= 4.0` 은 bonus를 더하지만, 현재 구현은 이 조건에 별도 reason 문구를 추가하지 않습니다.
 
 대표 reason / risk:
 - `최근 20일 기준 QQQ 대비 상대적으로 덜 약함`
@@ -114,7 +125,9 @@
 - `days_to_next_earnings <= 2` 이면 penalty `8`
 - `days_to_next_earnings <= 5` 이면 penalty `4`
 - `days_since_last_earnings <= 2` 이면 penalty `3`
-- penalty는 총점에서 차감하고 risk를 함께 남김
+- 같은 earnings overlay 안에서는 여러 조건이 동시에 맞아도 가장 큰 penalty 하나만 차감합니다.
+- earnings overlay penalty는 volatility overlay penalty와는 별도로 계산되고, 최종 점수에서는 두 overlay가 합산 차감됩니다.
+- penalty는 총점에서 차감하고 risk를 함께 남깁니다.
 
 대표 risk:
 - `실적 발표가 임박해 이벤트 리스크가 큼`
@@ -126,12 +139,13 @@
 
 현재 구현 로직:
 - `atr_14_pct >= 6.0` 이면 penalty `4`
-- `daily_range_pct >= 7.0` 이면 instability risk 추가
-- `bb_width_pct >= 25.0` 이면 구조 불안정 risk 추가
+- `daily_range_pct >= 7.0` 이면 penalty `2` 와 instability risk 추가
+- `bb_width_pct >= 25.0` 이면 penalty `3` 과 구조 불안정 risk 추가
 - 아래 3개가 모두 안정적이면 calm reason 추가
   - `atr_14_pct <= 3.5`
   - `daily_range_pct <= 4.5`
   - `bb_width_pct <= 18.0`
+- 같은 volatility overlay 안에서는 여러 조건이 동시에 맞아도 가장 큰 penalty 하나만 차감합니다.
 
 대표 reason / risk:
 - `변동성 과열 없이 반등 시도가 나타남`
@@ -180,6 +194,8 @@
 
 ## 12. Ranking Philosophy
 가장 많이 빠진 종목이 아니라, `과매도 + 저점 형성 + 전환 신호` 조합이 좋은 종목을 우선합니다.
+- 총점이 `0` 인 후보는 노이즈를 줄이기 위해 정렬 대상에서 제외합니다.
+- 동점이면 ticker 알파벳순으로 정렬합니다.
 
 ## 13. Candidate Snapshot Coverage
 현재 candidate snapshot에는 아래 묶음이 저장됩니다.
@@ -187,7 +203,9 @@
 - bottom / volume context: `distance_to_20d_low`, `distance_to_60d_low`, `average_volume_20d`, `volume_ratio_20d`
 - short-term reversal context: `close_improvement_streak`, `rsi_3d_change`
 - weekly context: `weekly_*`, `market_context_score`
-- benchmark context: `qqq_return_*`, `stock_return_*`, `rel_strength_*`, `relative_strength_score`
+- benchmark context: `qqq_return_*`, `stock_return_*`, `rel_strength_*`
+- scoring-derived field: `relative_strength_score`
+  - 이 값은 upstream raw input이 아니라 scoring 단계가 `market_context` subscore를 기록하면서 채우는 값입니다.
 - earnings overlay: `earnings_data_available`, `next_earnings_date`, `days_to_next_earnings`, `days_since_last_earnings`, `earnings_penalty`
 - volatility overlay: `atr_14`, `atr_14_pct`, `daily_range_pct`, `bb_width_pct`, `volatility_penalty`
 - candle structure: `close_above_open`, `close_location_value`, `lower_wick_ratio`, `upper_wick_ratio`, `real_body_pct`, `gap_down_pct`, `gap_down_reclaim`, `inside_day`, `bullish_engulfing_like`

@@ -18,9 +18,27 @@ from screener.intraday_ops import DEFAULT_COLLECTOR_COMMAND_TEMPLATE, IntradayPl
 from scripts.run_daily import ensure_venv, project_root
 
 
+def parse_run_date(value: str) -> str:
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("Date must be in YYYY-MM-DD format.") from exc
+
+    normalized = parsed.isoformat()
+    if normalized != value:
+        raise argparse.ArgumentTypeError("Date must be in YYYY-MM-DD format.")
+    return normalized
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cron-friendly staged intraday collector runner.")
-    parser.add_argument("--date", dest="run_date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format. Defaults to today.")
+    parser.add_argument(
+        "--date",
+        dest="run_date",
+        type=parse_run_date,
+        default=date.today().isoformat(),
+        help="Run date in YYYY-MM-DD format. Defaults to today.",
+    )
     parser.add_argument("--window-id", required=True, help="Configured intraday window identifier, for example open-1 or power-hour-2.")
     parser.add_argument("--output-root", type=Path, default=None, help="Root directory for staged intraday outputs. Defaults to config/env setting.")
     parser.add_argument("--collector-command", default=None, help="Collector command template. Overrides SCREENER_INTRADAY_COLLECTOR_COMMAND.")

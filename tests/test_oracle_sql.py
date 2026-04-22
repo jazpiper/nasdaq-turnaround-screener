@@ -106,10 +106,12 @@ def make_collection_result(tmp_path: Path) -> CollectionResult:
                 "minute_batches": [["AAPL"]],
                 "successes": ["AAPL"],
                 "failures": {},
+                "skipped_due_to_credit_exhaustion": [],
                 "remaining_tickers": ["MSFT"],
                 "uncollected_tickers": [],
                 "collected_count": 1,
                 "failed_count": 0,
+                "skipped_due_to_credit_exhaustion_count": 0,
                 "remaining_count": 1,
             }
         ),
@@ -138,6 +140,7 @@ def make_collection_result(tmp_path: Path) -> CollectionResult:
         ],
         successes=["AAPL"],
         failures={},
+        skipped_due_to_credit_exhaustion=[],
         artifacts=CollectionArtifacts(
             run_directory=run_directory,
             metadata_path=metadata_path,
@@ -193,3 +196,8 @@ def test_persist_intraday_collection_inserts_without_schema_ddl(tmp_path: Path) 
     assert any("INSERT INTO intraday_collection_runs" in statement for statement, _ in connection.statements)
     assert any("INSERT INTO intraday_collection_quotes" in statement for statement, _ in connection.statements)
     assert not any("CREATE TABLE" in statement for statement, _ in connection.statements)
+    intraday_insert = next(
+        parameters for statement, parameters in connection.statements if "INSERT INTO intraday_collection_runs" in statement
+    )
+    assert intraday_insert["credit_exhaustion_skips_json"] == "[]"
+    assert intraday_insert["credit_exhaustion_skip_count"] == 0

@@ -229,10 +229,12 @@ class OracleSqlStorage:
                         minute_batches_json,
                         successes_json,
                         failures_json,
+                        credit_exhaustion_skips_json,
                         remaining_tickers_json,
                         uncollected_tickers_json,
                         collected_count,
                         failed_count,
+                        credit_exhaustion_skip_count,
                         remaining_count,
                         artifact_directory
                     ) VALUES (
@@ -250,10 +252,12 @@ class OracleSqlStorage:
                         :minute_batches_json,
                         :successes_json,
                         :failures_json,
+                        :credit_exhaustion_skips_json,
                         :remaining_tickers_json,
                         :uncollected_tickers_json,
                         :collected_count,
                         :failed_count,
+                        :credit_exhaustion_skip_count,
                         :remaining_count,
                         :artifact_directory
                     )
@@ -273,10 +277,17 @@ class OracleSqlStorage:
                         "minute_batches_json": _json(metadata.get("minute_batches", [])),
                         "successes_json": _json(metadata.get("successes", [])),
                         "failures_json": _json(metadata.get("failures", {})),
+                        "credit_exhaustion_skips_json": _json(
+                            metadata.get("skipped_due_to_credit_exhaustion", [])
+                        ),
                         "remaining_tickers_json": _json(metadata.get("remaining_tickers", [])),
                         "uncollected_tickers_json": _json(metadata.get("uncollected_tickers", [])),
                         "collected_count": metadata.get("collected_count", len(result.collected)),
                         "failed_count": metadata.get("failed_count", len(result.failures)),
+                        "credit_exhaustion_skip_count": metadata.get(
+                            "skipped_due_to_credit_exhaustion_count",
+                            len(metadata.get("skipped_due_to_credit_exhaustion", [])),
+                        ),
                         "remaining_count": metadata.get("remaining_count", len(result.plan.remaining_tickers)),
                         "artifact_directory": str(result.artifacts.run_directory) if result.artifacts.run_directory else None,
                     },

@@ -110,10 +110,12 @@ SCHEMA_STATEMENTS = (
           minute_batches_json CLOB,
           successes_json CLOB,
           failures_json CLOB,
+          credit_exhaustion_skips_json CLOB,
           remaining_tickers_json CLOB,
           uncollected_tickers_json CLOB,
           collected_count NUMBER DEFAULT 0 NOT NULL,
           failed_count NUMBER DEFAULT 0 NOT NULL,
+          credit_exhaustion_skip_count NUMBER DEFAULT 0 NOT NULL,
           remaining_count NUMBER DEFAULT 0 NOT NULL,
           artifact_directory VARCHAR2(1000),
           created_at TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL
@@ -121,6 +123,28 @@ SCHEMA_STATEMENTS = (
     EXCEPTION
       WHEN OTHERS THEN
         IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+      EXECUTE IMMEDIATE '
+        ALTER TABLE intraday_collection_runs ADD (
+          credit_exhaustion_skips_json CLOB
+        )';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF SQLCODE != -1430 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+      EXECUTE IMMEDIATE '
+        ALTER TABLE intraday_collection_runs ADD (
+          credit_exhaustion_skip_count NUMBER DEFAULT 0 NOT NULL
+        )';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF SQLCODE != -1430 THEN RAISE; END IF;
     END;
     """,
     """
@@ -157,4 +181,3 @@ def initialize_oracle_schema(connection: Any) -> None:
         close = getattr(cursor, "close", None)
         if callable(close):
             close()
-

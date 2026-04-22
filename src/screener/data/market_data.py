@@ -8,6 +8,8 @@ from typing import Any, Iterable, Mapping, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
+
 
 @dataclass(frozen=True)
 class DailyBar:
@@ -49,7 +51,7 @@ def _read_url(url: str) -> str:
             "Accept": "application/json,text/plain,*/*",
         },
     )
-    with urlopen(request) as response:  # pragma: no cover, exercised via injected reader in tests
+    with urlopen(request, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS) as response:  # pragma: no cover, exercised via injected reader in tests
         return response.read().decode("utf-8")
 
 

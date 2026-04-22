@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import pandas as pd
 
@@ -13,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from screener.config import get_settings
 from screener.data.market_data import (
+    DEFAULT_HTTP_TIMEOUT_SECONDS,
     MarketDataProviderError,
     TwelveDataDailyBarFetcher,
     YFinanceDailyBarFetcher,
+    _read_url,
     build_market_data_fetcher,
     normalize_ohlcv_rows,
 )
@@ -139,6 +142,31 @@ class MarketDataProviderTests(unittest.TestCase):
 
         self.assertIn("GOOD", result.bars_by_ticker)
         self.assertEqual(result.failed_tickers["BAD"], "bad symbol")
+
+    def test_read_url_uses_default_timeout(self):
+        observed: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self) -> bytes:
+                return b'{"ok": true}'
+
+        def fake_urlopen(request, timeout=None):
+            observed["url"] = request.full_url
+            observed["timeout"] = timeout
+            return FakeResponse()
+
+        with mock.patch("screener.data.market_data.urlopen", side_effect=fake_urlopen):
+            body = _read_url("https://example.com/test")
+
+        self.assertEqual(body, '{"ok": true}')
+        self.assertEqual(observed["url"], "https://example.com/test")
+        self.assertEqual(observed["timeout"], DEFAULT_HTTP_TIMEOUT_SECONDS)
 
     def test_yfinance_fetcher_handles_single_ticker_multiindex_columns(self):
         index = pd.Index([pd.Timestamp("2026-04-20"), pd.Timestamp("2026-04-21")], name="Date")

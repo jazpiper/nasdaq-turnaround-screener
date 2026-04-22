@@ -44,6 +44,13 @@ class RunMetadata(BaseModel):
     run_mode: str = "daily"
     dry_run: bool = False
     artifact_directory: Path
+    planned_ticker_count: int = 0
+    successful_ticker_count: int = 0
+    failed_ticker_count: int = 0
+    bars_nonempty_count: int = 0
+    latest_bar_date_mismatch_count: int = 0
+    insufficient_history_count: int = 0
+    planned_tickers: list[str] = Field(default_factory=list)
     data_failures: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 

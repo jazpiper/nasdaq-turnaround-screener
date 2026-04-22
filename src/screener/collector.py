@@ -74,6 +74,7 @@ class CollectionResult:
     collected: list[CollectedQuote]
     successes: list[str]
     failures: dict[str, str]
+    skipped_due_to_credit_exhaustion: list[str]
     artifacts: CollectionArtifacts
 
 
@@ -145,6 +146,7 @@ class TwelveDataWindowCollector:
         started_at = self.clock()
         collected: list[CollectedQuote] = []
         failures: dict[str, str] = {}
+        skipped_due_to_credit_exhaustion: list[str] = []
         pause_seconds = ceil(60 / max_credits_per_minute)
 
         should_stop_early = False
@@ -168,7 +170,7 @@ class TwelveDataWindowCollector:
                     for later_index, later_batch in enumerate(plan.minute_batches[batch_index:], start=batch_index):
                         start_at = ticker_index + 1 if later_index == batch_index else 0
                         for pending in later_batch[start_at:]:
-                            failures[pending] = failure_message
+                            skipped_due_to_credit_exhaustion.append(pending)
                     break
 
                 is_last_request = batch_index == len(plan.minute_batches) - 1 and ticker_index == len(batch) - 1
@@ -191,6 +193,7 @@ class TwelveDataWindowCollector:
                     collected=collected,
                     successes=successes,
                     failures=failures,
+                    skipped_due_to_credit_exhaustion=skipped_due_to_credit_exhaustion,
                     artifacts=artifacts,
                 ),
             )
@@ -199,6 +202,7 @@ class TwelveDataWindowCollector:
             collected=collected,
             successes=successes,
             failures=failures,
+            skipped_due_to_credit_exhaustion=skipped_due_to_credit_exhaustion,
             artifacts=artifacts,
         )
 
@@ -233,12 +237,14 @@ class TwelveDataWindowCollector:
                 "minute_batches": result.plan.minute_batches,
                 "successes": result.successes,
                 "failures": result.failures,
+                "skipped_due_to_credit_exhaustion": result.skipped_due_to_credit_exhaustion,
                 "remaining_tickers": result.plan.remaining_tickers,
                 "uncollected_tickers": [
                     ticker for ticker in result.plan.window_tickers if ticker not in result.successes
                 ],
                 "collected_count": len(result.collected),
                 "failed_count": len(result.failures),
+                "skipped_due_to_credit_exhaustion_count": len(result.skipped_due_to_credit_exhaustion),
                 "remaining_count": len(result.plan.remaining_tickers),
             },
         )

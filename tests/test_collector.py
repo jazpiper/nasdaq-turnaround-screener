@@ -113,6 +113,7 @@ def test_run_window_writes_metadata_and_quotes(tmp_path: Path) -> None:
     assert metadata["planned_tickers"] == ["AAPL", "ABNB", "ADBE"]
     assert metadata["successes"] == ["AAPL", "ADBE"]
     assert metadata["failures"] == {"ABNB": "provider error"}
+    assert metadata["skipped_due_to_credit_exhaustion"] == []
     assert metadata["uncollected_tickers"] == ["ABNB"]
     assert metadata["remaining_tickers"] == []
 
@@ -144,6 +145,15 @@ def test_run_window_stops_early_when_daily_twelve_data_credits_are_exhausted(tmp
     assert result.successes == []
     assert result.failures == {
         "AAPL": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800.",
-        "ABNB": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800.",
-        "ADBE": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800.",
     }
+    assert result.skipped_due_to_credit_exhaustion == ["ABNB", "ADBE"]
+
+    assert result.artifacts.metadata_path is not None
+    metadata = json.loads(result.artifacts.metadata_path.read_text(encoding="utf-8"))
+    assert metadata["failures"] == {
+        "AAPL": "You have run out of API credits for the day. 811 API credits were used, with the current limit being 800."
+    }
+    assert metadata["skipped_due_to_credit_exhaustion"] == ["ABNB", "ADBE"]
+    assert metadata["uncollected_tickers"] == ["AAPL", "ABNB", "ADBE"]
+    assert metadata["failed_count"] == 1
+    assert metadata["skipped_due_to_credit_exhaustion_count"] == 2

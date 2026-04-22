@@ -166,6 +166,13 @@ def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     assert "volume_ratio_20d" in candidate.indicator_snapshot
     assert "weekly_trend_penalty" in candidate.indicator_snapshot
     assert "실적 발표가 임박해 이벤트 리스크가 큼" in candidate.risks
+    assert result.metadata.planned_ticker_count == 3
+    assert result.metadata.successful_ticker_count == 2
+    assert result.metadata.failed_ticker_count == 1
+    assert result.metadata.bars_nonempty_count == 2
+    assert result.metadata.latest_bar_date_mismatch_count == 2
+    assert result.metadata.insufficient_history_count == 0
+    assert result.metadata.planned_tickers == ["AAPL", "MSFT", "NVDA"]
     assert result.metadata.data_failures == ["NVDA: No price rows returned"]
     assert artifacts.markdown_path == tmp_path / "daily-report.md"
     assert artifacts.json_report_path == tmp_path / "daily-report.json"

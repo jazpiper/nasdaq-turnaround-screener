@@ -109,11 +109,26 @@ class ScreenPipeline:
         if isinstance(provider_failures, dict):
             failures.extend(f"{ticker}: {message}" for ticker, message in provider_failures.items())
 
+        bars_nonempty_count = 0
+        latest_bar_date_mismatch_count = 0
+        insufficient_history_count = 0
+
         for ticker in tickers:
             if isinstance(provider_failures, dict) and ticker.ticker in provider_failures:
                 continue
             try:
                 history = self.market_data_provider.fetch_history(ticker, context)
+                if history is not None and not history.empty:
+                    bars_nonempty_count += 1
+                    try:
+                        latest_bar = history["date"].max()
+                        latest_bar_date = latest_bar.date() if hasattr(latest_bar, "date") else latest_bar
+                        if latest_bar_date != context.run_date:
+                            latest_bar_date_mismatch_count += 1
+                    except Exception:
+                        latest_bar_date_mismatch_count += 1
+                    if len(history) < 60:
+                        insufficient_history_count += 1
                 indicators = self.indicator_engine.compute(history, ticker, context)
                 indicators = merge_benchmark_context(indicators, benchmark_context)
                 indicators = merge_earnings_context(indicators, earnings_by_ticker.get(ticker.ticker))
@@ -125,6 +140,8 @@ class ScreenPipeline:
 
         candidates.sort(key=lambda candidate: (-candidate.score, candidate.ticker))
 
+        planned_tickers = [item.ticker for item in tickers]
+
         result = ScreenRunResult(
             metadata=RunMetadata(
                 run_date=context.run_date,
@@ -133,6 +150,13 @@ class ScreenPipeline:
                 run_mode=context.run_mode,
                 dry_run=context.dry_run,
                 artifact_directory=context.output_dir,
+                planned_ticker_count=len(planned_tickers),
+                successful_ticker_count=len(planned_tickers) - len(failures),
+                failed_ticker_count=len(failures),
+                bars_nonempty_count=bars_nonempty_count,
+                latest_bar_date_mismatch_count=latest_bar_date_mismatch_count,
+                insufficient_history_count=insufficient_history_count,
+                planned_tickers=planned_tickers,
                 data_failures=failures,
                 notes=notes,
             ),

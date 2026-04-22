@@ -67,6 +67,12 @@ def run(
     typer.echo(f"Run date: {result.metadata.run_date.isoformat()}")
     typer.echo(f"Dry run: {result.metadata.dry_run}")
     typer.echo(f"Candidate count: {result.candidate_count}")
+    typer.echo(
+        "Data quality: "
+        f"nonempty={result.metadata.bars_nonempty_count}, "
+        f"latest_date_mismatch={result.metadata.latest_bar_date_mismatch_count}, "
+        f"insufficient_history={result.metadata.insufficient_history_count}"
+    )
     if settings.daily_intraday_source_mode == "prefer-staged":
         typer.echo(f"Intraday source mode: {settings.daily_intraday_source_mode} ({settings.intraday_output_root})")
 

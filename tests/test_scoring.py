@@ -69,6 +69,39 @@ class ScoringTests(unittest.TestCase):
         ])[0]
         self.assertTrue(any("주봉 추세" in risk for risk in candidate.risks))
 
+    def test_rank_candidates_excludes_zero_score_candidates(self):
+        ranked = rank_candidates([
+            make_snapshot(
+                "ZERO",
+                close=110.0,
+                low=96.0,
+                days_to_next_earnings=2,
+                atr_14_pct=6.5,
+                daily_range_pct=7.5,
+                bb_width_pct=26.0,
+                sma_5=120.0,
+                close_improvement_streak=0,
+                rsi_3d_change=-6.0,
+                rsi_14=50.0,
+                distance_to_20d_low=5.0,
+                distance_to_60d_low=100.0,
+                volume_ratio_20d=0.1,
+                market_context_score=0.0,
+                weekly_trend_penalty=6.0,
+                rel_strength_20d_vs_qqq=-6.0,
+                rel_strength_60d_vs_qqq=-9.0,
+                close_above_open=False,
+                real_body_pct=0.1,
+                close_location_value=0.2,
+                lower_wick_ratio=0.0,
+                upper_wick_ratio=0.5,
+                inside_day=False,
+                bullish_engulfing_like=False,
+                gap_down_reclaim=False,
+            )
+        ])
+        self.assertEqual(ranked, [])
+
 
 if __name__ == "__main__":
     unittest.main()

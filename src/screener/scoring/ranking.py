@@ -297,5 +297,9 @@ def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
 
 
 def rank_candidates(rows: Iterable[dict[str, Any]]) -> list[ScreenCandidate]:
-    scored = [score_candidate(row) for row in filter_candidates(rows)]
+    scored = [
+        candidate
+        for candidate in (score_candidate(row) for row in filter_candidates(rows))
+        if candidate.score >= thresholds.MINIMUM_TOTAL_SCORE
+    ]
     return sorted(scored, key=lambda candidate: (-candidate.score, candidate.ticker))
