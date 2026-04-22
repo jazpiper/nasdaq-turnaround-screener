@@ -89,6 +89,10 @@ def run(
     typer.echo(f"Markdown report: {artifacts.markdown_path}")
     typer.echo(f"JSON report: {artifacts.json_report_path}")
     typer.echo(f"Metadata report: {artifacts.metadata_path}")
+    if artifacts.alert_events_path is not None:
+        typer.echo(f"Alert events: {artifacts.alert_events_path}")
+    if artifacts.stable_alert_events_path is not None:
+        typer.echo(f"Stable alert entrypoint: {artifacts.stable_alert_events_path}")
     if run_id is not None:
         typer.echo(f"Oracle SQL run id: {run_id}")
 

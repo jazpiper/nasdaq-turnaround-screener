@@ -57,9 +57,12 @@ class StubPipeline:
             markdown_path=context.output_dir / "daily-report.md",
             json_report_path=context.output_dir / "daily-report.json",
             metadata_path=context.output_dir / "run-metadata.json",
+            alert_events_path=context.output_dir / "alert-events.json",
+            stable_alert_events_path=context.output_dir.parent / "latest" / "alert-events.json",
         )
         if not context.dry_run:
             context.output_dir.mkdir(parents=True, exist_ok=True)
+            artifacts.stable_alert_events_path.parent.mkdir(parents=True, exist_ok=True)
             artifacts.markdown_path.write_text("# Report\n\nAAPL\n", encoding="utf-8")
             artifacts.json_report_path.write_text(
                 json.dumps({
@@ -89,6 +92,8 @@ class StubPipeline:
                 }),
                 encoding="utf-8",
             )
+            artifacts.alert_events_path.write_text(json.dumps({"phase": "final"}), encoding="utf-8")
+            artifacts.stable_alert_events_path.write_text(json.dumps({"phase": "final"}), encoding="utf-8")
         else:
             artifacts = RunArtifacts()
         return result, artifacts
@@ -195,6 +200,8 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert json_path.exists()
     assert metadata_path.exists()
     assert "Markdown report" in result.stdout
+    assert "Alert events:" in result.stdout
+    assert "Stable alert entrypoint:" in result.stdout
     assert "AAPL" in markdown_path.read_text(encoding="utf-8")
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))

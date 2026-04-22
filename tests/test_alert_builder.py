@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from screener.alerts.builder import build_daily_alert_document
+from screener.alerts.policy import material_signature
 from screener.alerts.state import AlertState
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown, ScreenRunResult
 
@@ -92,3 +93,56 @@ def test_build_daily_alert_document_keeps_prior_state_when_quality_gate_blocks()
     assert document.events == []
     assert next_state.run_date == "2026-04-22"
     assert next_state.tickers["AAPL"].last_dedupe_key == "old-key"
+
+
+def test_build_daily_alert_document_upgrades_digest_candidate_to_single() -> None:
+    document, _ = build_daily_alert_document(
+        make_result([make_candidate(score=68)], bars_nonempty_count=95),
+        state=AlertState(
+            run_date="2026-04-22",
+            tickers={
+                "AAPL": {
+                    "last_delivery_tier": "digest",
+                    "last_material_signature": "52|4|BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+                    "last_phase": "provisional",
+                    "last_emitted_at": "2026-04-22T15:30:00+00:00",
+                    "last_dedupe_key": "old-key",
+                }
+            },
+        ),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+    )
+
+    assert document.events[0].change_status == "upgraded"
+
+
+def test_build_daily_alert_document_routes_unchanged_final_single_to_digest_only() -> None:
+    candidate = make_candidate(score=64)
+    document, _ = build_daily_alert_document(
+        make_result([candidate], bars_nonempty_count=95),
+        state=AlertState(
+            run_date="2026-04-22",
+            tickers={
+                "AAPL": {
+                    "last_delivery_tier": "single",
+                    "last_material_signature": material_signature(candidate, rank=1),
+                    "last_phase": "provisional",
+                    "last_emitted_at": "2026-04-22T15:30:00+00:00",
+                    "last_dedupe_key": "old-key",
+                    "last_score": 64,
+                    "last_rank": 1,
+                    "last_headline_reason": "BB 하단 근처 또는 재진입 구간",
+                    "last_headline_risk": "중기 추세는 아직 하락 압력일 수 있음",
+                    "last_earnings_penalty": 0,
+                    "last_volatility_penalty": 0,
+                }
+            },
+        ),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+    )
+
+    assert [event.event_type for event in document.events] == ["digest_alert"]
