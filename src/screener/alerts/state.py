@@ -15,6 +15,12 @@ class TickerAlertState(BaseModel):
     last_phase: str | None = None
     last_emitted_at: datetime | None = None
     last_dedupe_key: str | None = None
+    last_score: int | None = None
+    last_rank: int | None = None
+    last_headline_reason: str | None = None
+    last_headline_risk: str | None = None
+    last_earnings_penalty: int | None = None
+    last_volatility_penalty: int | None = None
 
 
 class DigestAlertState(BaseModel):

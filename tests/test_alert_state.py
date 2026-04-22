@@ -27,6 +27,12 @@ def test_save_alert_state_round_trips_and_cleans_up_temp_file(tmp_path: Path) ->
                 last_phase="daily",
                 last_emitted_at=datetime(2026, 4, 21, 7, 30, tzinfo=timezone.utc),
                 last_dedupe_key="aapl-dedupe",
+                last_score=66,
+                last_rank=3,
+                last_headline_reason="BB 하단 근처 또는 재진입 구간",
+                last_headline_risk="중기 추세는 아직 하락 압력일 수 있음",
+                last_earnings_penalty=0,
+                last_volatility_penalty=0,
             )
         },
         digest=DigestAlertState(
@@ -40,6 +46,38 @@ def test_save_alert_state_round_trips_and_cleans_up_temp_file(tmp_path: Path) ->
     assert saved_path == state_path
     assert load_alert_state(state_path) == expected
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_load_alert_state_handles_sparse_older_payload(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        """
+        {
+          "run_date": "2026-04-21",
+          "tickers": {
+            "AAPL": {
+              "last_delivery_tier": "primary",
+              "last_material_signature": "sig-aapl",
+              "last_phase": "daily",
+              "last_emitted_at": "2026-04-21T07:30:00+00:00",
+              "last_dedupe_key": "aapl-dedupe"
+            }
+          }
+        }
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_alert_state(state_path)
+
+    assert state.tickers["AAPL"].last_delivery_tier == "primary"
+    assert state.tickers["AAPL"].last_score is None
+    assert state.tickers["AAPL"].last_rank is None
+    assert state.tickers["AAPL"].last_headline_reason is None
+    assert state.tickers["AAPL"].last_headline_risk is None
+    assert state.tickers["AAPL"].last_earnings_penalty is None
+    assert state.tickers["AAPL"].last_volatility_penalty is None
 
 
 def test_write_json_atomic_replaces_existing_payload(tmp_path: Path) -> None:
