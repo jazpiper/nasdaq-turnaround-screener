@@ -27,6 +27,10 @@ _EXTENDED_STATE_KEYS = {
 }
 
 
+def _has_state_value(previous_state: dict[str, str | None], key: str) -> bool:
+    return previous_state.get(key) is not None
+
+
 def evaluate_daily_quality_gate(metadata: RunMetadata) -> str:
     if metadata.failed_ticker_count > 20 or metadata.bars_nonempty_count < 80 or metadata.latest_bar_date_mismatch_count > 10:
         return "block"
@@ -83,8 +87,8 @@ def _has_single_reason_mix(candidate: CandidateResult) -> bool:
     return has_reversal_reason and has_oversold_or_bottom_reason
 
 
-def _has_extended_previous_state(previous_state: dict[str, str]) -> bool:
-    return any(key in previous_state for key in _EXTENDED_STATE_KEYS)
+def _has_extended_previous_state(previous_state: dict[str, str | None]) -> bool:
+    return any(_has_state_value(previous_state, key) for key in _EXTENDED_STATE_KEYS)
 
 
 def determine_change_status(
@@ -98,7 +102,6 @@ def determine_change_status(
         return "new"
 
     previous_tier = previous_state.get("last_delivery_tier")
-    previous_signature = previous_state.get("last_material_signature")
     previous_score = int(previous_state.get("last_score", candidate.score) or candidate.score)
     previous_rank = int(previous_state.get("last_rank", rank) or rank)
     previous_headline_reason = previous_state.get("last_headline_reason")
@@ -121,29 +124,14 @@ def determine_change_status(
         return "material_change"
     if not has_extended_previous_state:
         return "unchanged"
-    if (
-        previous_signature is not None
-        and (
-            previous_headline_reason != current_headline_reason
-            or previous_headline_risk != current_headline_risk
-            or previous_earnings_penalty != current_earnings_penalty
-            or previous_volatility_penalty != current_volatility_penalty
-        )
-    ):
+    if _has_state_value(previous_state, "last_headline_reason") and previous_headline_reason != current_headline_reason:
         return "material_change"
-    if previous_signature is None and (
-        previous_headline_reason is not None
-        or previous_headline_risk is not None
-        or previous_state.get("last_earnings_penalty") is not None
-        or previous_state.get("last_volatility_penalty") is not None
-    ):
-        if (
-            previous_headline_reason != current_headline_reason
-            or previous_headline_risk != current_headline_risk
-            or previous_earnings_penalty != current_earnings_penalty
-            or previous_volatility_penalty != current_volatility_penalty
-        ):
-            return "material_change"
+    if _has_state_value(previous_state, "last_headline_risk") and previous_headline_risk != current_headline_risk:
+        return "material_change"
+    if _has_state_value(previous_state, "last_earnings_penalty") and previous_earnings_penalty != current_earnings_penalty:
+        return "material_change"
+    if _has_state_value(previous_state, "last_volatility_penalty") and previous_volatility_penalty != current_volatility_penalty:
+        return "material_change"
     return "unchanged"
 
 

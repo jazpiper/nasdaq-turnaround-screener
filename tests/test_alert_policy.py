@@ -10,6 +10,7 @@ from screener.alerts.policy import (
     evaluate_intraday_quality_gate,
     material_signature,
 )
+from screener.alerts.state import TickerAlertState
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown
 
 
@@ -120,6 +121,22 @@ def test_determine_change_status_keeps_legacy_sparse_state_unchanged() -> None:
         "last_dedupe_key": "key-aapl",
     }
 
+    assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "unchanged"
+
+
+def test_determine_change_status_keeps_round_tripped_legacy_state_unchanged() -> None:
+    candidate = make_candidate(score=64)
+    previous = TickerAlertState.model_validate(
+        {
+            "last_delivery_tier": "single",
+            "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+            "last_phase": "final",
+            "last_emitted_at": "2026-04-22T15:30:00+00:00",
+            "last_dedupe_key": "key-aapl",
+        }
+    ).model_dump(mode="json")
+
+    assert previous["last_score"] is None
     assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "unchanged"
 
 
