@@ -23,3 +23,15 @@ def test_update_latest_pointer_creates_symlink(tmp_path: Path) -> None:
     assert latest_path.is_symlink()
     assert latest_path.resolve() == target_dir.resolve()
     assert (latest_path / "daily-report.md").read_text(encoding="utf-8") == "# report\n"
+
+
+def test_update_latest_pointer_exposes_alert_sidecar(tmp_path: Path) -> None:
+    output_root = tmp_path / "daily"
+    target_dir = output_root / "2026-04-21"
+    target_dir.mkdir(parents=True)
+    (target_dir / "daily-report.md").write_text("# report\n", encoding="utf-8")
+    (target_dir / "alert-events.json").write_text('{"phase":"final"}\n', encoding="utf-8")
+
+    latest_path = update_latest_pointer(output_root, target_dir)
+
+    assert (latest_path / "alert-events.json").read_text(encoding="utf-8") == '{"phase":"final"}\n'

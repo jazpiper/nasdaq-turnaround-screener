@@ -27,6 +27,8 @@ daily runner는 `.venv` 준비, 의존성 설치, `output/daily/YYYY-MM-DD/` 출
 `--date` 는 **America/New_York 거래일 기준**으로 넣는 것을 전제로 합니다. 스케줄러가 UTC/KST에서 돈다면 당일 로컬 날짜를 그대로 쓰지 말고 NY trading day를 명시적으로 넘기는 편이 안전합니다.
 - `run` CLI는 stdout에 `Data quality: nonempty=..., latest_date_mismatch=..., insufficient_history=...` 요약을 함께 출력합니다.
 - `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers` 가 함께 기록됩니다.
+- daily run은 `daily-report.json` 옆에 `alert-events.json` 도 함께 생성합니다.
+- OpenClaw는 daily consumer entrypoint로 `output/daily/latest/alert-events.json` 을 읽으면 됩니다.
 - earnings calendar 또는 benchmark context fetch가 실패하면 run은 계속 진행하고, 사유는 `run-metadata.json` / `daily-report.json` 의 `notes` 에 남깁니다.
 - 운영 모니터링에서는 `latest_bar_date_mismatch_count` 증가를 stale bar 징후로, `insufficient_history_count` 증가를 provider coverage 문제 징후로 먼저 보는 편이 안전합니다.
 
@@ -50,6 +52,8 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --ski
 - 운영에서는 wrapper 사용을 기본값으로 두고, raw `collect-window` CLI는 수동 분할 수집이나 ad-hoc 점검 용도로 보는 편이 안전합니다.
 - 실제 artifact는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 기록됩니다. wrapper 기본값에서는 `window-01-of-01` 아래에 쌓입니다.
 - `collection-metadata.json` 에는 `planned_tickers`, `minute_batches`, `successes`, `failures`, `skipped_due_to_credit_exhaustion`, `remaining_tickers`, `uncollected_tickers` 와 집계 count가 함께 기록됩니다.
+- 각 completed intraday run은 `collected-quotes.json` 옆에 provisional `alert-events.json` 도 함께 생성합니다.
+- OpenClaw는 intraday consumer entrypoint로 `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽으면 됩니다.
 - `collect-window` CLI stdout은 `Failures` 만 바로 보여주므로, 일일 크레딧 소진으로 인한 미시도 ticker 수는 `collection-metadata.json` 의 `skipped_due_to_credit_exhaustion_count` 로 확인하는 편이 정확합니다.
 
 ## 4. Backtest
@@ -91,9 +95,9 @@ python -m screener.cli.main init-oracle-schema
 - 장중 수집은 `python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
 - 장 마감 후 daily run은 `python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
 - Oracle을 쓰는 환경이면 bootstrap 단계에서 `python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
-- OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/` 입니다.
+- OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/alert-events.json` 입니다.
 - daily report JSON/Markdown에는 candidate별 ticker와 company name이 함께 포함됩니다.
-- intraday artifact는 daily run 보강용이므로, 기본적으로 OpenClaw가 직접 읽을 필요는 없습니다.
+- intraday raw artifact는 daily run 보강용이지만, OpenClaw는 provisional consumer entrypoint `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽을 수 있습니다.
 - same-day staged merge는 intraday metadata 전체를 읽는 것이 아니라, 각 run의 `completed_at` 또는 `started_at` 으로 최신 snapshot을 고른 뒤 `collected-quotes.json` 을 사용합니다.
 
 ## 8. OpenClaw Command Template
@@ -121,5 +125,7 @@ env PYTHONPATH={project_root}/src {python} -m screener.cli.main collect-window -
 - Twelve Data가 일일 크레딧 소진(`run out of API credits for the day` 류) 응답을 주면, 해당 slot의 추가 ticker 호출을 즉시 중단하고 이후 planned ticker는 미시도 상태로 metadata에 남깁니다.
 - metadata에서는 실제 호출 후 실패한 ticker는 `failures` 에 남기고, 아직 호출하지 못한 ticker는 `skipped_due_to_credit_exhaustion` 으로 별도 분리합니다.
 - 위 크레딧 소진은 현재 구현상 process crash로 취급하지 않습니다. `collect-window` 는 artifact와 failure metadata를 남기고 종료하며, non-zero exit는 설정 오류나 Oracle persistence 실패 같은 시스템 오류에 주로 사용합니다.
+- alert sidecar generation 실패는 non-zero exit로 처리합니다.
+- alert sidecar generation이 실패하더라도 raw report / collection artifact는 이미 기록되어 남아 있을 수 있습니다.
 - Oracle SQL credential 누락이나 persistence 실패는 non-zero exit로 올립니다.
 - 운영 alert는 non-zero exit만 보지 말고 `collection-metadata.json` 의 `failed_count`, `skipped_due_to_credit_exhaustion_count`, `failures`, 또는 credit exhaustion failure reason 문자열도 함께 감시하는 편이 안전합니다.
