@@ -36,8 +36,6 @@ def material_signature(candidate: CandidateResult, *, rank: int) -> str:
     snapshot = candidate.indicator_snapshot or {}
     return "|".join(
         [
-            str(candidate.score),
-            str(rank),
             headline_reason(candidate),
             headline_risk(candidate),
             str(snapshot.get("earnings_penalty", 0)),

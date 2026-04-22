@@ -65,13 +65,26 @@ def test_determine_change_status_marks_small_recompute_as_unchanged() -> None:
     candidate = make_candidate(score=64)
     previous = {
         "last_delivery_tier": "single",
-        "last_material_signature": "64|1|BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+        "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
         "last_phase": "provisional",
         "last_emitted_at": "2026-04-22T15:30:00+00:00",
         "last_dedupe_key": "key-aapl",
     }
 
     assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "unchanged"
+
+
+def test_determine_change_status_keeps_small_score_and_rank_nudge_unchanged() -> None:
+    candidate = make_candidate(score=65)
+    previous = {
+        "last_delivery_tier": "single",
+        "last_material_signature": "BB 하단 근처 또는 재진입 구간|중기 추세는 아직 하락 압력일 수 있음|0|0",
+        "last_phase": "provisional",
+        "last_emitted_at": "2026-04-22T15:30:00+00:00",
+        "last_dedupe_key": "key-aapl",
+    }
+
+    assert determine_change_status(candidate, rank=2, phase="final", previous_state=previous) == "unchanged"
 
 
 def test_evaluate_intraday_quality_gate_warns_on_partial_collection() -> None:
