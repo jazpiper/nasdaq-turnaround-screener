@@ -154,12 +154,17 @@ class StubCollector:
         run_directory = output_root / run_date.isoformat() / "window-01-of-06" / "run-20260421T073000Z"
         metadata_path = run_directory / "collection-metadata.json"
         quotes_path = run_directory / "collected-quotes.json"
+        alert_events_path = run_directory / "alert-events.json"
+        stable_alert_events_path = output_root / run_date.isoformat() / "latest-alert-events.json"
         if not dry_run:
             run_directory.mkdir(parents=True, exist_ok=True)
             metadata_path.write_text(json.dumps({"window_index": window_index, "remaining_count": 83}), encoding="utf-8")
             quotes_path.write_text(json.dumps({"quotes": [{"ticker": "AAPL"}]}), encoding="utf-8")
+            stable_alert_events_path.parent.mkdir(parents=True, exist_ok=True)
+            alert_events_path.write_text(json.dumps({"phase": "provisional"}), encoding="utf-8")
+            stable_alert_events_path.write_text(json.dumps({"phase": "provisional"}), encoding="utf-8")
         else:
-            run_directory = metadata_path = quotes_path = None
+            run_directory = metadata_path = quotes_path = alert_events_path = stable_alert_events_path = None
 
         class Plan:
             window_index = 0
@@ -172,6 +177,8 @@ class StubCollector:
                 self.run_directory = run_directory
                 self.metadata_path = metadata_path
                 self.quotes_path = quotes_path
+                self.alert_events_path = alert_events_path
+                self.stable_alert_events_path = stable_alert_events_path
 
         class Result:
             def __init__(self):
@@ -272,6 +279,8 @@ def test_collect_window_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "Window: 1/6" in result.stdout
     assert "Remaining after window: 83" in result.stdout
+    assert "Provisional alert events:" in result.stdout
+    assert "Stable provisional alert entrypoint:" in result.stdout
     assert (tmp_path / "2026-04-21" / "window-01-of-06" / "run-20260421T073000Z" / "collection-metadata.json").exists()
 
 
@@ -295,6 +304,22 @@ def test_collect_window_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -
 
     assert result.exit_code == 0
     assert "Oracle SQL collection id: intraday_test" in result.stdout
+
+
+def test_collect_window_exits_nonzero_when_alert_sidecar_generation_fails(tmp_path: Path, monkeypatch) -> None:
+    class FailingAlertCollector(StubCollector):
+        def run_window(self, **kwargs):
+            raise AlertSidecarError("alert sidecar failed")
+
+    monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", FailingAlertCollector)
+
+    result = runner.invoke(
+        app,
+        ["collect-window", "--date", "2026-04-21", "--window-index", "0", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Alert sidecar generation failed: alert sidecar failed" in (result.stdout + result.stderr)
 
 
 def test_backtest_writes_artifacts(tmp_path: Path, monkeypatch) -> None:

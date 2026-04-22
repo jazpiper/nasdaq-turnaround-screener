@@ -12,6 +12,7 @@ DAILY_CREDIT_EXHAUSTED_MARKERS = (
     "current limit being 800",
 )
 
+from screener.alerts import AlertSidecarError
 from screener.config import Settings
 from screener.alerts.builder import build_intraday_alert_document
 from screener.alerts.state import load_alert_state, save_alert_state
@@ -70,6 +71,8 @@ class CollectionArtifacts:
     run_directory: Path | None
     metadata_path: Path | None
     quotes_path: Path | None
+    alert_events_path: Path | None = None
+    stable_alert_events_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -209,13 +212,20 @@ class TwelveDataWindowCollector:
                 skipped_due_to_credit_exhaustion=skipped_due_to_credit_exhaustion,
                 artifacts=artifacts,
             )
-            self._write_provisional_alerts(
+            updated_artifacts = self._write_provisional_alerts(
                 run_date=run_date,
                 output_root=output_root,
                 result=collection_result,
                 completed_at=completed_at,
             )
-            return collection_result
+            return CollectionResult(
+                plan=plan,
+                collected=collected,
+                successes=successes,
+                failures=failures,
+                skipped_due_to_credit_exhaustion=skipped_due_to_credit_exhaustion,
+                artifacts=updated_artifacts,
+            )
         return CollectionResult(
             plan=plan,
             collected=collected,
@@ -232,43 +242,53 @@ class TwelveDataWindowCollector:
         output_root: Path,
         result: CollectionResult,
         completed_at: datetime,
-    ) -> None:
+    ) -> CollectionArtifacts:
         if (
             result.artifacts.run_directory is None
             or result.artifacts.metadata_path is None
             or result.artifacts.quotes_path is None
         ):
-            return
+            return result.artifacts
 
-        provisional_settings = replace(
-            self.settings,
-            market_data_provider="yfinance",
-            output_dir=result.artifacts.run_directory,
-            daily_intraday_source_mode="prefer-staged",
-            intraday_output_root=output_root,
+        try:
+            provisional_settings = replace(
+                self.settings,
+                market_data_provider="yfinance",
+                output_dir=result.artifacts.run_directory,
+                daily_intraday_source_mode="prefer-staged",
+                intraday_output_root=output_root,
+            )
+            provisional_context = build_context(
+                run_date=run_date,
+                generated_at=completed_at,
+                dry_run=True,
+                output_dir=result.artifacts.run_directory,
+                run_mode="intraday-provisional",
+                universe_name=self.settings.universe_name,
+            )
+            provisional_result, _ = ScreenPipeline(settings=provisional_settings).run(provisional_context)
+            state_path = output_root.parent / "alerts" / run_date.isoformat() / "alert-state.json"
+            state = load_alert_state(state_path)
+            document, next_state = build_intraday_alert_document(
+                provisional_result,
+                collection_result=result,
+                state=state,
+                artifact_directory=str(result.artifacts.run_directory),
+                report_path=str(result.artifacts.quotes_path),
+                metadata_path=str(result.artifacts.metadata_path),
+            )
+            run_path, stable_path = build_intraday_alert_paths(result.artifacts.run_directory, run_date.isoformat())
+            write_alert_document(run_path, stable_path, document)
+            save_alert_state(state_path, next_state)
+        except Exception as exc:
+            raise AlertSidecarError(str(exc)) from exc
+        return CollectionArtifacts(
+            run_directory=result.artifacts.run_directory,
+            metadata_path=result.artifacts.metadata_path,
+            quotes_path=result.artifacts.quotes_path,
+            alert_events_path=run_path,
+            stable_alert_events_path=stable_path,
         )
-        provisional_context = build_context(
-            run_date=run_date,
-            generated_at=completed_at,
-            dry_run=True,
-            output_dir=result.artifacts.run_directory,
-            run_mode="intraday-provisional",
-            universe_name=self.settings.universe_name,
-        )
-        provisional_result, _ = ScreenPipeline(settings=provisional_settings).run(provisional_context)
-        state_path = output_root.parent / "alerts" / run_date.isoformat() / "alert-state.json"
-        state = load_alert_state(state_path)
-        document, next_state = build_intraday_alert_document(
-            provisional_result,
-            collection_result=result,
-            state=state,
-            artifact_directory=str(result.artifacts.run_directory),
-            report_path=str(result.artifacts.quotes_path),
-            metadata_path=str(result.artifacts.metadata_path),
-        )
-        run_path, stable_path = build_intraday_alert_paths(result.artifacts.run_directory, run_date.isoformat())
-        write_alert_document(run_path, stable_path, document)
-        save_alert_state(state_path, next_state)
 
     def _write_artifacts(
         self,
