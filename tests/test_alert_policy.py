@@ -60,6 +60,14 @@ def test_classify_candidate_requires_reversal_and_bottom_reason_mix() -> None:
     assert classify_candidate(candidate, rank=1, change_status="new") == "digest"
 
 
+def test_classify_candidate_accepts_actual_scorer_reversal_phrase() -> None:
+    candidate = make_candidate(
+        reasons=["하단 꼬리 이후 종가가 일중 상단에서 마감", "최근 20일 저점 부근"],
+    )
+
+    assert classify_candidate(candidate, rank=1, change_status="new") == "single"
+
+
 def test_classify_candidate_suppresses_high_earnings_penalty() -> None:
     candidate = make_candidate(score=72)
     candidate.indicator_snapshot["earnings_penalty"] = 8
@@ -81,6 +89,15 @@ def test_determine_change_status_marks_small_recompute_as_unchanged() -> None:
         "last_phase": "provisional",
         "last_emitted_at": "2026-04-22T15:30:00+00:00",
         "last_dedupe_key": "key-aapl",
+    }
+
+    assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "unchanged"
+
+
+def test_determine_change_status_handles_partial_previous_state() -> None:
+    candidate = make_candidate(score=64)
+    previous = {
+        "last_delivery_tier": "single",
     }
 
     assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "unchanged"
