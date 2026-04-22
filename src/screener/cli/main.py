@@ -111,14 +111,18 @@ def collect_window(
     if persist_oracle_sql:
         settings.oracle_sql_enabled = True
     collector = TwelveDataWindowCollector(settings=settings)
-    result = collector.run_window(
-        run_date=parse_run_date(run_date),
-        output_root=settings.output_dir,
-        window_index=window_index,
-        total_windows=total_windows,
-        max_credits_per_minute=max_credits_per_minute,
-        dry_run=dry_run,
-    )
+    try:
+        result = collector.run_window(
+            run_date=parse_run_date(run_date),
+            output_root=settings.output_dir,
+            window_index=window_index,
+            total_windows=total_windows,
+            max_credits_per_minute=max_credits_per_minute,
+            dry_run=dry_run,
+        )
+    except AlertSidecarError as exc:
+        typer.echo(f"Alert sidecar generation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
 
     typer.echo(f"Window: {result.plan.window_index + 1}/{result.plan.total_windows}")
     typer.echo(f"Planned tickers: {len(result.plan.window_tickers)}")
@@ -134,6 +138,10 @@ def collect_window(
     typer.echo(f"Run directory: {result.artifacts.run_directory}")
     typer.echo(f"Metadata report: {result.artifacts.metadata_path}")
     typer.echo(f"Quotes report: {result.artifacts.quotes_path}")
+    if result.artifacts.alert_events_path is not None:
+        typer.echo(f"Provisional alert events: {result.artifacts.alert_events_path}")
+    if result.artifacts.stable_alert_events_path is not None:
+        typer.echo(f"Stable provisional alert entrypoint: {result.artifacts.stable_alert_events_path}")
     if collection_run_id is not None:
         typer.echo(f"Oracle SQL collection id: {collection_run_id}")
 

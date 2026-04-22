@@ -87,6 +87,7 @@ docs/                current-state documentation
 - `docs/architecture.md`: 현재 구현된 시스템 구조, 데이터 흐름, 저장 방식
 - `docs/signals.md`: 현재 코드 기준 필터, 점수화, penalty 규칙
 - `docs/operations.md`: 실행 명령, OpenClaw 연동 방식, NY trading day 기준 운영 흐름
+- `docs/openclaw-cron-runbook.md`: OpenClaw cron 등록과 consumer handoff용 운영 런북
 - `docs/doc-review-2026-04-22.md`: 2026-04-22 문서 리뷰 반영 결과와 후속 개선 상태
 
 ## Intraday Scheduling Note
