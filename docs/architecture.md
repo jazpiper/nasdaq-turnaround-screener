@@ -19,6 +19,7 @@ CLI / runner
   -> scoring / ranking
   -> run metadata + data-quality counters
   -> markdown + json + metadata output
+  -> final alert sidecar output
   -> optional Oracle SQL persistence
 ```
 
@@ -30,6 +31,7 @@ CLI / runner
   -> minute-batch throttling
   -> early stop on daily credit exhaustion
   -> per-slot artifact write
+  -> provisional alert sidecar output
   -> optional Oracle SQL persistence
 ```
 
@@ -83,10 +85,17 @@ CLI
   - `daily-report.md`
   - `daily-report.json`: candidate list와 함께 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers`, `data_failures`, `notes` 를 포함
   - `run-metadata.json`: 전체 `RunMetadata` snapshot. planning / quality field와 `data_failures`, `notes` 를 함께 기록
+  - `alert-events.json`: OpenClaw consumer contract용 final alert sidecar
 - latest pointer: `output/daily/latest`
 - intraday output: `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../`
   - `collection-metadata.json`: `planned_tickers`, `minute_batches`, `successes`, `failures`, `skipped_due_to_credit_exhaustion`, `remaining_tickers`, `uncollected_tickers`, 각종 count를 포함
   - `collected-quotes.json`
+  - `alert-events.json`: 해당 run 기준 provisional alert sidecar
+- stable consumer entrypoints:
+  - `output/daily/latest/alert-events.json`
+  - `output/intraday/YYYY-MM-DD/latest-alert-events.json`
+- local dedupe state:
+  - `output/alerts/YYYY-MM-DD/alert-state.json`
 
 ## 8. Persistence
 - 기본 truth artifact는 file output입니다.
@@ -104,5 +113,5 @@ CLI
 - snapshot schema version 값은 `src/screener/_pipeline/snapshot.py` 의 `INDICATOR_SNAPSHOT_SCHEMA_VERSION` 상수를 기준으로 봅니다.
 
 ## 9. OpenClaw Boundary
-- 이 저장소는 데이터 처리와 artifact 생성을 담당하고, OpenClaw는 실행 orchestration과 secret 주입, 결과 전달을 담당합니다.
+- 이 저장소는 데이터 처리와 alert-ready sidecar 생성을 담당하고, OpenClaw는 실행 orchestration과 Telegram delivery를 담당합니다.
 - 운영 명령과 환경변수는 `docs/operations.md`, 현재 screening 규칙은 `docs/signals.md` 를 기준 문서로 봅니다.

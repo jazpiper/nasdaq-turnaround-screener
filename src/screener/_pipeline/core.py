@@ -4,6 +4,9 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from screener.alerts import AlertSidecarError, build_daily_alert_document
+from screener.alerts.state import load_alert_state, save_alert_state
+from screener.alerts.writer import build_daily_alert_paths, write_alert_document
 from screener.config import Settings
 from screener.data import EarningsCalendarProvider, EarningsInfo
 from screener.models import (
@@ -182,10 +185,30 @@ class ScreenPipeline:
             output_dir / self.settings.metadata_report_name,
             result.metadata.model_dump(mode="json"),
         )
+        try:
+            latest_dir = ensure_directory(output_dir.parent / "latest")
+            state_path = output_dir.parent / "alerts" / result.metadata.run_date.isoformat() / "alert-state.json"
+            state = load_alert_state(state_path)
+            document, next_state = build_daily_alert_document(
+                result,
+                state=state,
+                artifact_directory=str(output_dir),
+                report_path=str(json_report_path),
+                metadata_path=str(metadata_path),
+            )
+            run_alert_path, stable_alert_path = build_daily_alert_paths(output_dir, latest_dir)
+            write_alert_document(run_alert_path, stable_alert_path, document)
+            save_alert_state(state_path, next_state)
+        except Exception as exc:
+            result.metadata.notes.append(f"Alert sidecar generation failed: {exc}")
+            write_json(metadata_path, result.metadata.model_dump(mode="json"))
+            raise AlertSidecarError(str(exc)) from exc
         return RunArtifacts(
             markdown_path=markdown_path,
             json_report_path=json_report_path,
             metadata_path=metadata_path,
+            alert_events_path=run_alert_path,
+            stable_alert_events_path=stable_alert_path,
         )
 
 
@@ -212,4 +235,3 @@ __all__ = [
     "ScreenPipeline",
     "build_context",
 ]
-

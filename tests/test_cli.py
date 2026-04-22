@@ -6,6 +6,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from screener.alerts import AlertSidecarError
 from screener.backtest import BacktestArtifacts
 from screener.cli.main import app
 from screener.models import CandidateResult, RunArtifacts, RunMetadata, ScreenRunResult, ScoreBreakdown
@@ -56,9 +57,12 @@ class StubPipeline:
             markdown_path=context.output_dir / "daily-report.md",
             json_report_path=context.output_dir / "daily-report.json",
             metadata_path=context.output_dir / "run-metadata.json",
+            alert_events_path=context.output_dir / "alert-events.json",
+            stable_alert_events_path=context.output_dir.parent / "latest" / "alert-events.json",
         )
         if not context.dry_run:
             context.output_dir.mkdir(parents=True, exist_ok=True)
+            artifacts.stable_alert_events_path.parent.mkdir(parents=True, exist_ok=True)
             artifacts.markdown_path.write_text("# Report\n\nAAPL\n", encoding="utf-8")
             artifacts.json_report_path.write_text(
                 json.dumps({
@@ -88,6 +92,8 @@ class StubPipeline:
                 }),
                 encoding="utf-8",
             )
+            artifacts.alert_events_path.write_text(json.dumps({"phase": "final"}), encoding="utf-8")
+            artifacts.stable_alert_events_path.write_text(json.dumps({"phase": "final"}), encoding="utf-8")
         else:
             artifacts = RunArtifacts()
         return result, artifacts
@@ -194,6 +200,8 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert json_path.exists()
     assert metadata_path.exists()
     assert "Markdown report" in result.stdout
+    assert "Alert events:" in result.stdout
+    assert "Stable alert entrypoint:" in result.stdout
     assert "AAPL" in markdown_path.read_text(encoding="utf-8")
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
@@ -208,6 +216,26 @@ def test_run_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert payload["candidate_count"] == 1
     assert payload["candidates"][0]["ticker"] == "AAPL"
     assert payload["candidates"][0]["name"] == "Apple Inc."
+
+
+def test_run_exits_nonzero_when_alert_sidecar_generation_fails(tmp_path: Path, monkeypatch) -> None:
+    class FailingAlertPipeline(StubPipeline):
+        def run(self, context):
+            result, artifacts = super().run(context)
+            if not context.dry_run:
+                raise AlertSidecarError("alert sidecar failed")
+            return result, artifacts
+
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", FailingAlertPipeline)
+
+    result = runner.invoke(
+        app,
+        ["run", "--date", "2026-04-21", "--output-dir", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Alert sidecar generation failed: alert sidecar failed" in (result.stdout + result.stderr)
+    assert (tmp_path / "daily-report.json").exists()
 
 
 def test_run_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:

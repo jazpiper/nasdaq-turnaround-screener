@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from math import ceil
 from pathlib import Path
@@ -13,7 +13,11 @@ DAILY_CREDIT_EXHAUSTED_MARKERS = (
 )
 
 from screener.config import Settings
+from screener.alerts.builder import build_intraday_alert_document
+from screener.alerts.state import load_alert_state, save_alert_state
+from screener.alerts.writer import build_intraday_alert_paths, write_alert_document
 from screener.data import DailyBar, TwelveDataDailyBarFetcher
+from screener.pipeline import ScreenPipeline, build_context
 from screener.storage.files import ensure_directory, write_json
 from screener.universe.nasdaq100 import NASDAQ_100_TICKERS
 
@@ -197,6 +201,21 @@ class TwelveDataWindowCollector:
                     artifacts=artifacts,
                 ),
             )
+            collection_result = CollectionResult(
+                plan=plan,
+                collected=collected,
+                successes=successes,
+                failures=failures,
+                skipped_due_to_credit_exhaustion=skipped_due_to_credit_exhaustion,
+                artifacts=artifacts,
+            )
+            self._write_provisional_alerts(
+                run_date=run_date,
+                output_root=output_root,
+                result=collection_result,
+                completed_at=completed_at,
+            )
+            return collection_result
         return CollectionResult(
             plan=plan,
             collected=collected,
@@ -205,6 +224,51 @@ class TwelveDataWindowCollector:
             skipped_due_to_credit_exhaustion=skipped_due_to_credit_exhaustion,
             artifacts=artifacts,
         )
+
+    def _write_provisional_alerts(
+        self,
+        *,
+        run_date: date,
+        output_root: Path,
+        result: CollectionResult,
+        completed_at: datetime,
+    ) -> None:
+        if (
+            result.artifacts.run_directory is None
+            or result.artifacts.metadata_path is None
+            or result.artifacts.quotes_path is None
+        ):
+            return
+
+        provisional_settings = replace(
+            self.settings,
+            market_data_provider="yfinance",
+            output_dir=result.artifacts.run_directory,
+            daily_intraday_source_mode="prefer-staged",
+            intraday_output_root=output_root,
+        )
+        provisional_context = build_context(
+            run_date=run_date,
+            generated_at=completed_at,
+            dry_run=True,
+            output_dir=result.artifacts.run_directory,
+            run_mode="intraday-provisional",
+            universe_name=self.settings.universe_name,
+        )
+        provisional_result, _ = ScreenPipeline(settings=provisional_settings).run(provisional_context)
+        state_path = output_root.parent / "alerts" / run_date.isoformat() / "alert-state.json"
+        state = load_alert_state(state_path)
+        document, next_state = build_intraday_alert_document(
+            provisional_result,
+            collection_result=result,
+            state=state,
+            artifact_directory=str(result.artifacts.run_directory),
+            report_path=str(result.artifacts.quotes_path),
+            metadata_path=str(result.artifacts.metadata_path),
+        )
+        run_path, stable_path = build_intraday_alert_paths(result.artifacts.run_directory, run_date.isoformat())
+        write_alert_document(run_path, stable_path, document)
+        save_alert_state(state_path, next_state)
 
     def _write_artifacts(
         self,
