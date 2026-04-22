@@ -23,7 +23,7 @@ def test_build_intraday_alert_paths(tmp_path: Path) -> None:
     run_path, stable_path = build_intraday_alert_paths(run_directory, "2026-04-21")
 
     assert run_path == run_directory / "alert-events.json"
-    assert stable_path == tmp_path / "intraday" / "latest-alert-events.json"
+    assert stable_path == tmp_path / "intraday" / "2026-04-21" / "latest-alert-events.json"
 
 
 def test_write_alert_document_writes_both_paths(tmp_path: Path) -> None:

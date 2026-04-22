@@ -11,7 +11,7 @@ def build_daily_alert_paths(run_directory: Path, latest_directory: Path) -> tupl
 
 
 def build_intraday_alert_paths(run_directory: Path, run_date: str) -> tuple[Path, Path]:
-    date_root = run_directory.parents[2]
+    date_root = run_directory.parents[2] / run_date
     return run_directory / "alert-events.json", date_root / "latest-alert-events.json"
 
 
