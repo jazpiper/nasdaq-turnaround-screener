@@ -7,10 +7,9 @@
 
 - 최소 히스토리: `bars_available >= 60`
 - 유동성: `average_volume_20d >= 1_000_000`
-- Bollinger proximity:
-  - `close <= bb_lower * 1.02`
-  - 또는 `low <= bb_lower`
-- 최근 저점 근접: `distance_to_20d_low <= 5.0`
+- 바닥 근접 (아래 중 하나 이상):
+  - Bollinger proximity: `close <= bb_lower * 1.04` 또는 `low <= bb_lower`
+  - 최근 저점 근접: `distance_to_20d_low <= 8.0`
 - 필수 값 존재:
   - `close`
   - `low`
@@ -18,16 +17,14 @@
   - `rsi_14`
   - `distance_to_20d_low`
   - `volume_ratio_20d`
-- severe weekly damage 제외:
-  - `weekly_trend_severe_damage == false`
 
 ## 2. Total Score Formula
 최종 점수는 아래처럼 계산됩니다.
 
-- `total_score = sum(subscores) - earnings_penalty - volatility_penalty`
+- `total_score = sum(subscores) - earnings_penalty - volatility_penalty - severe_weekly_penalty`
 - 총점이 `0` 이면 후보 리스트에는 남기지 않고 제외합니다. 현재 최소 총점 cutoff는 `1` 입니다.
-- earnings overlay와 volatility overlay는 서로 독립적으로 계산되고, 두 overlay 사이에서는 penalty가 합산 차감됩니다.
-- 같은 overlay 안에서 여러 조건이 동시에 맞아도 penalty는 모두 더하지 않고 **가장 큰 값 하나만** 적용합니다.
+- earnings / volatility / severe_weekly 세 overlay는 서로 독립적으로 계산되고, 최종 점수에서 합산 차감됩니다.
+- earnings overlay와 volatility overlay 각각의 내부에서는 여러 조건이 동시에 맞아도 penalty는 모두 더하지 않고 **가장 큰 값 하나만** 적용합니다.
 - 총점과 각 subscore는 모두 정수(`int`)로 관리됩니다.
 - threshold 상수는 `src/screener/scoring/thresholds.py` 에 모여 있습니다.
 
@@ -93,8 +90,8 @@
 - `relative_strength_score`
 
 현재 구현 로직:
-- severe damage 조건이면 후보에서 제외합니다.
-  - 현재 severe damage는 `weekly_close < weekly_sma_10 * 0.85`, `weekly_sma_5 < weekly_sma_10`, `weekly_close_improving == false` 조합일 때 `true` 가 됩니다.
+- severe damage 조건이면 **필터 통과는 허용하되** `severe_weekly_penalty = 10` 을 차감하고 risk를 붙입니다.
+  - severe damage는 `weekly_close < weekly_sma_10 * 0.85`, `weekly_sma_5 < weekly_sma_10`, `weekly_close_improving == false` 조합일 때 `true` 가 됩니다.
 - 약한 훼손이면 `weekly_trend_penalty` 만 부여합니다.
   - `weekly_close < weekly_sma_10 * 0.9` 이고 `weekly_sma_5 < weekly_sma_10` 이며 개선 중이 아니면 penalty `6`
   - `weekly_close < weekly_sma_10 * 0.95` 이고 `weekly_sma_5 < weekly_sma_10` 이며 개선 중이 아니면 penalty `3`
@@ -109,6 +106,7 @@
 - `최근 20일 기준 시장 대비 상대약세가 큼`
 - `장세 반등 대비 추종력이 약할 수 있음`
 - `주봉 추세가 아직 약해 강한 반전 확인이 더 필요함`
+- `주봉 추세가 심하게 훼손돼 반전 신뢰도가 낮음`
 - `시장/섹터 맥락 확인이 필요함`
 
 ## 8. Earnings Risk Overlay
@@ -208,6 +206,7 @@
   - 이 값은 upstream raw input이 아니라 scoring 단계가 `market_context` subscore를 기록하면서 채우는 값입니다.
 - earnings overlay: `earnings_data_available`, `next_earnings_date`, `days_to_next_earnings`, `days_since_last_earnings`, `earnings_penalty`
 - volatility overlay: `atr_14`, `atr_14_pct`, `daily_range_pct`, `bb_width_pct`, `volatility_penalty`
+- severe weekly overlay: `weekly_trend_severe_damage`, `severe_weekly_penalty`
 - candle structure: `close_above_open`, `close_location_value`, `lower_wick_ratio`, `upper_wick_ratio`, `real_body_pct`, `gap_down_pct`, `gap_down_reclaim`, `inside_day`, `bullish_engulfing_like`
 
 ## 14. Human Review Checklist

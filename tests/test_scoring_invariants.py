@@ -126,7 +126,7 @@ class ScoringInvariantTests(unittest.TestCase):
             close_improvement_streak=0,
             rsi_3d_change=-6.0,
             rsi_14=50.0,
-            distance_to_20d_low=5.0,
+            distance_to_20d_low=12.5,
             distance_to_60d_low=100.0,
             volume_ratio_20d=0.1,
             market_context_score=0.0,

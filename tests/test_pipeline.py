@@ -371,7 +371,10 @@ def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path:
 
     result, _ = pipeline.run(build_context(run_date=date(2026, 4, 21), dry_run=True, output_dir=tmp_path))
 
-    assert result.candidate_count == 0
+    # severe weekly damage now applies a score penalty rather than hard-filtering;
+    # any candidate that passes must carry the risk warning
+    for candidate in result.candidates:
+        assert any("심하게 훼손" in risk for risk in candidate.risks)
 
 
 def test_build_context_normalizes_generated_at_to_new_york_timezone() -> None:
