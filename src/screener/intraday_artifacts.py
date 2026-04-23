@@ -19,7 +19,7 @@ class StagedIntradayQuote:
     volume: float
     source_path: Path
 
-    def as_daily_bar(self) -> DailyBar:
+    def as_daily_bar(self, *, volume: float | None = None) -> DailyBar:
         trading_day = self.timestamp.date()
         return DailyBar(
             ticker=self.ticker,
@@ -29,7 +29,7 @@ class StagedIntradayQuote:
             low=self.low,
             close=self.close,
             adj_close=self.close,
-            volume=self.volume,
+            volume=self.volume if volume is None else volume,
         )
 
 
@@ -92,15 +92,32 @@ def merge_history_with_staged_quote(history: list[DailyBar], staged_quote: Stage
         return list(history)
 
     merged = list(history)
-    staged_bar = staged_quote.as_daily_bar()
+    neutral_volume = _neutral_staged_volume(merged)
+    staged_bar = staged_quote.as_daily_bar(volume=neutral_volume)
     last_bar = merged[-1]
     if staged_bar.trading_date < last_bar.trading_date:
         return merged
     if staged_bar.trading_date == last_bar.trading_date:
-        merged[-1] = staged_bar
+        merged[-1] = DailyBar(
+            ticker=last_bar.ticker,
+            trading_date=last_bar.trading_date,
+            open=last_bar.open,
+            high=max(last_bar.high, staged_bar.high),
+            low=min(last_bar.low, staged_bar.low),
+            close=staged_bar.close,
+            adj_close=staged_bar.close,
+            volume=last_bar.volume,
+        )
         return merged
     merged.append(staged_bar)
     return merged
+
+
+def _neutral_staged_volume(history: list[DailyBar]) -> float:
+    recent = history[-20:] if len(history) >= 20 else history
+    if not recent:
+        return 0.0
+    return sum(bar.volume for bar in recent) / len(recent)
 
 
 def _read_json(path: Path) -> dict:

@@ -44,4 +44,11 @@ def test_historical_backtest_runner_writes_summary_and_observations(tmp_path: Pa
     assert artifacts.observations_path == tmp_path / "backtest-observations.csv"
     assert artifacts.summary_path.exists()
     assert artifacts.observations_path.exists()
-    assert "forward_return_5d" in artifacts.observations_path.read_text(encoding="utf-8")
+    observation_csv = artifacts.observations_path.read_text(encoding="utf-8")
+    assert "tier" in observation_csv
+    assert "forward_return_5d" in observation_csv
+    assert "benchmark_forward_return_5d" in observation_csv
+    assert "excess_return_5d" in observation_csv
+    assert "tier_forward_return_summary" in summary
+    assert "score_cutoff_forward_return_summary" in summary
+    assert "daily_top_n_forward_return_summary" in summary

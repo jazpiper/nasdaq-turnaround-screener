@@ -7,6 +7,7 @@ from screener.alerts.builder import build_daily_alert_document
 from screener.alerts.policy import material_signature
 from screener.alerts.state import AlertState
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown, ScreenRunResult
+from screener.scoring import BUY_REVIEW_TIER
 
 
 def make_candidate(*, ticker: str = "AAPL", score: int = 64) -> CandidateResult:
@@ -15,11 +16,14 @@ def make_candidate(*, ticker: str = "AAPL", score: int = 64) -> CandidateResult:
         name="Apple Inc.",
         score=score,
         subscores=ScoreBreakdown(oversold=20, bottom_context=15, reversal=18, volume=6, market_context=5),
+        tier=BUY_REVIEW_TIER,
+        tier_reasons=["score, reversal, volume, and risk profile qualify for buy review"],
         reasons=["BB 하단 근처 또는 재진입 구간", "5일선 회복 또는 회복 시도"],
         risks=["중기 추세는 아직 하락 압력일 수 있음"],
         indicator_snapshot={
             "earnings_penalty": 0,
             "volatility_penalty": 0,
+            "volume_ratio_20d": 1.1,
         },
         generated_at=datetime(2026, 4, 22, 7, 30, tzinfo=timezone.utc),
     )
@@ -62,6 +66,7 @@ def test_build_daily_alert_document_marks_single_events_warning_and_includes_sou
     assert len(document.events) == 1
     assert document.events[0].severity == "warning"
     assert document.events[0].payload["source_candidate_ref"] == "#/candidates/0"
+    assert document.events[0].payload["tier"] == BUY_REVIEW_TIER
     assert next_state.tickers["AAPL"].last_delivery_tier == "single"
 
 

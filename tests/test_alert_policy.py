@@ -12,6 +12,7 @@ from screener.alerts.policy import (
 )
 from screener.alerts.state import TickerAlertState
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown
+from screener.scoring import BUY_REVIEW_TIER
 
 
 def make_candidate(
@@ -26,11 +27,14 @@ def make_candidate(
         name="Apple Inc.",
         score=score,
         subscores=ScoreBreakdown(oversold=20, bottom_context=15, reversal=18, volume=6, market_context=5),
+        tier=BUY_REVIEW_TIER,
+        tier_reasons=["score, reversal, volume, and risk profile qualify for buy review"],
         reasons=reasons or ["BB 하단 근처 또는 재진입 구간", "5일선 회복 또는 회복 시도"],
         risks=risks or ["중기 추세는 아직 하락 압력일 수 있음"],
         indicator_snapshot={
             "earnings_penalty": 0,
             "volatility_penalty": 0,
+            "volume_ratio_20d": 1.1,
         },
         generated_at=datetime(2026, 4, 22, 7, 30, tzinfo=timezone.utc),
     )
@@ -78,9 +82,17 @@ def test_classify_candidate_accepts_actual_scorer_reversal_phrase() -> None:
 
 def test_classify_candidate_suppresses_high_earnings_penalty() -> None:
     candidate = make_candidate(score=72)
+    candidate.tier = "avoid/high-risk"
     candidate.indicator_snapshot["earnings_penalty"] = 8
 
     assert classify_candidate(candidate, rank=1, change_status="new") == "suppressed"
+
+
+def test_classify_candidate_routes_watchlist_to_digest_not_single() -> None:
+    candidate = make_candidate(score=72)
+    candidate.tier = "watchlist"
+
+    assert classify_candidate(candidate, rank=1, change_status="new") == "digest"
 
 
 def test_determine_change_status_marks_small_recompute_as_unchanged() -> None:

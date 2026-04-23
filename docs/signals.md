@@ -195,7 +195,33 @@
 - 총점이 `1` 미만인 후보는 노이즈를 줄이기 위해 정렬 대상에서 제외합니다.
 - 동점이면 ticker 알파벳순으로 정렬합니다.
 
-## 13. Candidate Snapshot Coverage
+## 13. Investability Tier
+`score` 는 turnaround quality를 넓게 재는 값이고, `tier` 는 실제 매수 검토 가능성을 좁히는 2차 분류입니다.
+
+현재 tier:
+- `buy-review`: 매수 검토 후보. 기본 조건은 `score >= 60`, `reversal >= 15`, `volume_ratio_20d >= 0.8`, risk 개수 `<= 3`, severe weekly damage 없음, 실적 임박 penalty 없음, 높은 volatility penalty 없음입니다.
+- `watchlist`: 후보로는 남기지만 매수 검토 조건 중 일부가 부족한 상태입니다.
+- `avoid/high-risk`: severe weekly damage, 실적 임박 penalty, 높은 volatility penalty, 또는 risk flag 과다로 매수 검토에서 제외하는 상태입니다.
+
+Report와 JSON artifact에는 `tier` 와 `tier_reasons` 가 함께 기록됩니다. Markdown report는 전체 후보와 별도로 `Buy Review Candidates` 섹션을 먼저 보여줍니다.
+
+## 14. Intraday Staged Quote Policy
+`prefer-staged` 모드에서 Twelve Data 1분봉 quote는 최신 가격 확인용으로만 일봉 히스토리에 병합합니다.
+
+- 같은 거래일의 정규 일봉이 이미 있으면 staged quote의 `close` 는 반영하되, `volume` 은 기존 정규 일봉 volume을 유지합니다.
+- 정규 일봉보다 staged quote 날짜가 늦으면 새 synthetic bar를 추가하되, 1분봉 volume 대신 직전 최대 20개 일봉 평균 volume을 사용해 `volume_ratio_20d` 를 중립화합니다.
+- 이 정책은 1분봉 단일 volume이 daily volume처럼 계산되어 `volume_ratio_20d` 를 0에 가깝게 왜곡하는 문제를 막기 위한 것입니다.
+
+## 15. Backtest Evaluation
+Backtest artifact는 전체 후보 평균뿐 아니라 아래 summary를 함께 기록합니다.
+
+- `tier_forward_return_summary`
+- `score_cutoff_forward_return_summary`
+- `daily_top_n_forward_return_summary`
+
+각 summary는 horizon별 count, 평균 수익률, median 수익률, win rate, QQQ 대비 평균 excess return을 포함합니다.
+
+## 16. Candidate Snapshot Coverage
 현재 candidate snapshot에는 아래 묶음이 저장됩니다.
 - base technicals: `close`, `low`, `bb_lower`, `rsi_14`, `sma_5`, `sma_20`, `sma_60`
 - bottom / volume context: `distance_to_20d_low`, `distance_to_60d_low`, `average_volume_20d`, `volume_ratio_20d`
@@ -209,7 +235,7 @@
 - severe weekly overlay: `weekly_trend_severe_damage`, `severe_weekly_penalty`
 - candle structure: `close_above_open`, `close_location_value`, `lower_wick_ratio`, `upper_wick_ratio`, `real_body_pct`, `gap_down_pct`, `gap_down_reclaim`, `inside_day`, `bullish_engulfing_like`
 
-## 14. Human Review Checklist
+## 17. Human Review Checklist
 최종 후보 확인 시 아래를 같이 봅니다.
 - 실적 발표 일정
 - 섹터 뉴스

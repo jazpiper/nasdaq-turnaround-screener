@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from screener.models import CandidateResult, RunMetadata
+from screener.scoring import AVOID_HIGH_RISK_TIER, BUY_REVIEW_TIER, WATCHLIST_TIER
 
 _REVERSAL_REASON_HINTS = (
     "회복",
@@ -66,6 +67,7 @@ def material_signature(candidate: CandidateResult, *, rank: int) -> str:
         [
             str(candidate.score),
             str(rank),
+            candidate.tier,
             headline_reason(candidate),
             headline_risk(candidate),
             str(snapshot.get("earnings_penalty", 0)),
@@ -141,15 +143,22 @@ def classify_candidate(candidate: CandidateResult, *, rank: int, change_status: 
     volatility_penalty = int(snapshot.get("volatility_penalty", 0) or 0)
     reason_count = len(candidate.reasons)
 
-    if candidate.score < 45 or reason_count < 2 or earnings_penalty >= 8 or (volatility_penalty >= 4 and candidate.score < 60):
+    if (
+        candidate.tier == AVOID_HIGH_RISK_TIER
+        or candidate.score < 45
+        or reason_count < 2
+        or earnings_penalty >= 8
+        or (volatility_penalty >= 4 and candidate.score < 60)
+    ):
         return "suppressed"
     if (
-        candidate.score >= 60
+        candidate.tier == BUY_REVIEW_TIER
+        and candidate.score >= 60
         and rank <= 5
         and change_status in {"new", "upgraded", "material_change"}
         and _has_single_reason_mix(candidate)
     ):
         return "single"
-    if rank <= 10:
+    if candidate.tier in {BUY_REVIEW_TIER, WATCHLIST_TIER} and rank <= 10:
         return "digest"
     return "suppressed"

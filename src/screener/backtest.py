@@ -32,20 +32,29 @@ class BacktestObservation:
     run_date: date
     ticker: str
     score: int
+    tier: str
     reasons: list[str]
     risks: list[str]
     forward_returns: dict[int, float | None]
+    benchmark_forward_returns: dict[int, float | None]
 
     def as_row(self, forward_horizons: tuple[int, ...]) -> dict[str, Any]:
         row: dict[str, Any] = {
             "run_date": self.run_date.isoformat(),
             "ticker": self.ticker,
             "score": self.score,
+            "tier": self.tier,
             "reasons": " | ".join(self.reasons),
             "risks": " | ".join(self.risks),
         }
         for horizon in forward_horizons:
             row[f"forward_return_{horizon}d"] = self.forward_returns.get(horizon)
+            row[f"benchmark_forward_return_{horizon}d"] = self.benchmark_forward_returns.get(horizon)
+            stock_return = self.forward_returns.get(horizon)
+            benchmark_return = self.benchmark_forward_returns.get(horizon)
+            row[f"excess_return_{horizon}d"] = (
+                None if stock_return is None or benchmark_return is None else stock_return - benchmark_return
+            )
         return row
 
 
@@ -141,9 +150,15 @@ class HistoricalBacktestRunner:
                         run_date=run_date,
                         ticker=candidate.ticker,
                         score=candidate.score,
+                        tier=candidate.tier,
                         reasons=list(candidate.reasons),
                         risks=list(candidate.risks),
                         forward_returns=_compute_forward_returns(full_history, run_date, forward_horizons),
+                        benchmark_forward_returns=_compute_forward_returns(
+                            benchmark_history,
+                            run_date,
+                            forward_horizons,
+                        ),
                     )
                 )
 
@@ -155,6 +170,9 @@ class HistoricalBacktestRunner:
             "candidate_observation_count": len(observations),
             "forward_horizons": list(forward_horizons),
             "forward_return_summary": _summarize_forward_returns(observations, forward_horizons),
+            "tier_forward_return_summary": _summarize_by_tier(observations, forward_horizons),
+            "score_cutoff_forward_return_summary": _summarize_by_score_cutoff(observations, forward_horizons),
+            "daily_top_n_forward_return_summary": _summarize_daily_top_n(observations, forward_horizons),
             "data_failures": data_failures,
         }
 
@@ -256,22 +274,108 @@ def _summarize_forward_returns(
 ) -> dict[str, dict[str, float | int | None]]:
     summary: dict[str, dict[str, float | int | None]] = {}
     for horizon in forward_horizons:
-        returns = [
-            value
-            for observation in observations
-            if (value := observation.forward_returns.get(horizon)) is not None
-        ]
-        summary[f"{horizon}d"] = {
-            "count": len(returns),
-            "average_return_pct": round(fmean(returns), 4) if returns else None,
+        summary[f"{horizon}d"] = _return_stats(observations, horizon)
+    return summary
+
+
+def _summarize_by_tier(
+    observations: list[BacktestObservation],
+    forward_horizons: tuple[int, ...],
+) -> dict[str, dict[str, dict[str, float | int | None]]]:
+    tiers = sorted({observation.tier for observation in observations})
+    return {
+        tier: {
+            f"{horizon}d": _return_stats(
+                [observation for observation in observations if observation.tier == tier],
+                horizon,
+            )
+            for horizon in forward_horizons
+        }
+        for tier in tiers
+    }
+
+
+def _summarize_by_score_cutoff(
+    observations: list[BacktestObservation],
+    forward_horizons: tuple[int, ...],
+) -> dict[str, dict[str, dict[str, float | int | None]]]:
+    cutoffs = (40, 45, 50, 55, 60)
+    return {
+        f"score_gte_{cutoff}": {
+            f"{horizon}d": _return_stats(
+                [observation for observation in observations if observation.score >= cutoff],
+                horizon,
+            )
+            for horizon in forward_horizons
+        }
+        for cutoff in cutoffs
+    }
+
+
+def _summarize_daily_top_n(
+    observations: list[BacktestObservation],
+    forward_horizons: tuple[int, ...],
+) -> dict[str, dict[str, dict[str, float | int | None]]]:
+    by_date: dict[date, list[BacktestObservation]] = {}
+    for observation in observations:
+        by_date.setdefault(observation.run_date, []).append(observation)
+
+    summary: dict[str, dict[str, dict[str, float | int | None]]] = {}
+    for top_n in (1, 3, 5):
+        selected: list[BacktestObservation] = []
+        for daily_observations in by_date.values():
+            selected.extend(
+                sorted(daily_observations, key=lambda observation: (-observation.score, observation.ticker))[:top_n]
+            )
+        summary[f"top_{top_n}"] = {
+            f"{horizon}d": _return_stats(selected, horizon)
+            for horizon in forward_horizons
         }
     return summary
 
 
-def _build_observation_csv(observations: list[BacktestObservation], forward_horizons: tuple[int, ...]) -> str:
-    fieldnames = ["run_date", "ticker", "score", "reasons", "risks"] + [
-        f"forward_return_{horizon}d" for horizon in forward_horizons
+def _return_stats(
+    observations: list[BacktestObservation],
+    horizon: int,
+) -> dict[str, float | int | None]:
+    returns = [
+        value
+        for observation in observations
+        if (value := observation.forward_returns.get(horizon)) is not None
     ]
+    excess_returns = [
+        stock_return - benchmark_return
+        for observation in observations
+        if (stock_return := observation.forward_returns.get(horizon)) is not None
+        and (benchmark_return := observation.benchmark_forward_returns.get(horizon)) is not None
+    ]
+    return {
+        "count": len(returns),
+        "average_return_pct": round(fmean(returns), 4) if returns else None,
+        "median_return_pct": round(_median(returns), 4) if returns else None,
+        "win_rate": round(sum(value > 0 for value in returns) / len(returns), 4) if returns else None,
+        "average_excess_return_pct": round(fmean(excess_returns), 4) if excess_returns else None,
+    }
+
+
+def _median(values: list[float]) -> float:
+    sorted_values = sorted(values)
+    midpoint = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[midpoint]
+    return (sorted_values[midpoint - 1] + sorted_values[midpoint]) / 2.0
+
+
+def _build_observation_csv(observations: list[BacktestObservation], forward_horizons: tuple[int, ...]) -> str:
+    fieldnames = ["run_date", "ticker", "score", "tier", "reasons", "risks"]
+    for horizon in forward_horizons:
+        fieldnames.extend(
+            [
+                f"forward_return_{horizon}d",
+                f"benchmark_forward_return_{horizon}d",
+                f"excess_return_{horizon}d",
+            ]
+        )
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
