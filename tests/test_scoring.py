@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from screener.scoring.ranking import filter_candidates, rank_candidates
+from screener.scoring.ranking import filter_candidates, rank_candidates, score_candidate
 
 
 def make_snapshot(ticker: str, **overrides):
@@ -41,9 +41,9 @@ class ScoringTests(unittest.TestCase):
     def test_filter_candidates_rejects_insufficient_liquidity(self):
         rows = [make_snapshot("AAPL", average_volume_20d=100_000.0)]
         self.assertEqual(filter_candidates(rows), [])
-    def test_filter_candidates_rejects_severely_broken_weekly_trend(self):
+    def test_filter_candidates_passes_severely_broken_weekly_trend(self):
         rows = [make_snapshot("AAPL", weekly_trend_severe_damage=True)]
-        self.assertEqual(filter_candidates(rows), [])
+        self.assertEqual(len(filter_candidates(rows)), 1)
 
 
     def test_rank_candidates_orders_by_score(self):
@@ -69,6 +69,11 @@ class ScoringTests(unittest.TestCase):
         ])[0]
         self.assertTrue(any("주봉 추세" in risk for risk in candidate.risks))
 
+    def test_severe_weekly_damage_applies_penalty_not_filter(self):
+        candidate = score_candidate(make_snapshot("SEVERE", weekly_trend_severe_damage=True))
+        self.assertEqual(candidate.snapshot["severe_weekly_penalty"], 10)
+        self.assertTrue(any("심하게 훼손" in risk for risk in candidate.risks))
+
     def test_rank_candidates_excludes_zero_score_candidates(self):
         ranked = rank_candidates([
             make_snapshot(
@@ -83,7 +88,7 @@ class ScoringTests(unittest.TestCase):
                 close_improvement_streak=0,
                 rsi_3d_change=-6.0,
                 rsi_14=50.0,
-                distance_to_20d_low=5.0,
+                distance_to_20d_low=12.5,
                 distance_to_60d_low=100.0,
                 volume_ratio_20d=0.1,
                 market_context_score=0.0,

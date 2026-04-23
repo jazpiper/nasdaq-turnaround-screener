@@ -64,11 +64,10 @@ def filter_candidates(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         if not passes_liquidity(row, minimum_average_volume=thresholds.MINIMUM_AVERAGE_VOLUME):
             continue
-        if not near_lower_bollinger(row, tolerance=thresholds.LOWER_BOLLINGER_TOLERANCE):
-            continue
-        if not near_recent_low(row, max_distance_pct=thresholds.MAX_DISTANCE_TO_20D_LOW_PCT):
-            continue
-        if bool(row.get("weekly_trend_severe_damage", False)):
+        if not (
+            near_lower_bollinger(row, tolerance=thresholds.LOWER_BOLLINGER_TOLERANCE)
+            or near_recent_low(row, max_distance_pct=thresholds.MAX_DISTANCE_TO_20D_LOW_PCT)
+        ):
             continue
         candidates.append(row)
     return candidates
@@ -233,6 +232,13 @@ def _apply_earnings_penalty(snapshot: dict[str, Any], risks: list[str]) -> int:
     return penalty
 
 
+def _apply_severe_weekly_damage_penalty(snapshot: dict[str, Any], risks: list[str]) -> int:
+    if bool(snapshot.get("weekly_trend_severe_damage", False)):
+        risks.append("주봉 추세가 심하게 훼손돼 반전 신뢰도가 낮음")
+        return thresholds.SEVERE_WEEKLY_DAMAGE_PENALTY
+    return 0
+
+
 def _apply_volatility_penalty(snapshot: dict[str, Any], reasons: list[str], risks: list[str]) -> int:
     penalty = 0
     calm_signals = 0
@@ -280,9 +286,11 @@ def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
     }
     earnings_penalty = _apply_earnings_penalty(working_snapshot, risks)
     volatility_penalty = _apply_volatility_penalty(working_snapshot, reasons, risks)
+    severe_weekly_penalty = _apply_severe_weekly_damage_penalty(working_snapshot, risks)
     working_snapshot["earnings_penalty"] = earnings_penalty
     working_snapshot["volatility_penalty"] = volatility_penalty
-    score = max(sum(subscores.values()) - earnings_penalty - volatility_penalty, 0)
+    working_snapshot["severe_weekly_penalty"] = severe_weekly_penalty
+    score = max(sum(subscores.values()) - earnings_penalty - volatility_penalty - severe_weekly_penalty, 0)
     if (_as_float(working_snapshot, "sma_20") or 0.0) < (_as_float(working_snapshot, "sma_60") or 0.0):
         risks.append("중기 추세는 아직 하락 압력일 수 있음")
     return ScreenCandidate(
