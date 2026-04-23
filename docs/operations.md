@@ -2,28 +2,27 @@
 
 ## 1. Bootstrap
 ```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
 - OpenClaw는 정기 실행과 secret 주입을 맡고, 이 저장소는 batch 실행과 artifact 생성을 맡습니다.
+- `uv.lock` 을 커밋해 운영/개발 환경의 dependency resolution을 고정합니다.
 - 운영 기준 날짜는 항상 `America/New_York` 거래일입니다.
 
 ## 2. Daily Run
 직접 CLI를 써도 되고 runner를 써도 됩니다.
 
 ```bash
-python -m screener.cli.main run --date 2026-04-21
-python -m screener.cli.main run --date 2026-04-21 --use-staged-intraday
-python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
+uv run python -m screener.cli.main run --date 2026-04-21
+uv run python -m screener.cli.main run --date 2026-04-21 --use-staged-intraday
+uv run python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 
-python scripts/run_daily.py --date 2026-04-21 --skip-install
-python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --skip-install
+uv run python scripts/run_daily.py --date 2026-04-21 --skip-install
+uv run python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --skip-install
 ```
 
-daily runner는 `.venv` 준비, 의존성 설치, `output/daily/YYYY-MM-DD/` 출력, `output/daily/latest` 갱신까지 처리합니다.
+daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-MM-DD/` 출력, `output/daily/latest` 갱신까지 처리합니다.
 `--date` 는 **America/New_York 거래일 기준**으로 넣는 것을 전제로 합니다. 스케줄러가 UTC/KST에서 돈다면 당일 로컬 날짜를 그대로 쓰지 말고 NY trading day를 명시적으로 넘기는 편이 안전합니다.
 - `run` CLI는 stdout에 `Data quality: nonempty=..., latest_date_mismatch=..., insufficient_history=...` 요약을 함께 출력합니다.
 - `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers` 가 함께 기록됩니다.
@@ -35,14 +34,14 @@ daily runner는 `.venv` 준비, 의존성 설치, `output/daily/YYYY-MM-DD/` 출
 ## 3. Intraday Collection
 ```bash
 # raw CLI 기본값: 6분할 계획 중 1개 window, 8 credits/min
-python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
+uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
 # raw CLI로 full-universe 재수집을 강제하려면 아래처럼 명시
-python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --total-windows 1 --max-credits-per-minute 5
-python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --persist-oracle-sql
+uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --total-windows 1 --max-credits-per-minute 5
+uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --persist-oracle-sql
 
 # 운영 권장 entrypoint: wrapper
-python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
-python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install --persist-oracle-sql
+uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
+uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install --persist-oracle-sql
 ```
 
 - 기본 장중 cadence는 `open-1`, `open-2`, `midday-1`, `midday-2`, `power-hour-1`, `power-hour-2` 의 6개 slot입니다.
@@ -58,8 +57,8 @@ python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --ski
 
 ## 4. Backtest
 ```bash
-python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
-python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21 --horizons 5,10,20
+uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
+uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21 --horizons 5,10,20
 ```
 
 - 현재 backtest는 threshold calibration용 최소 skeleton입니다.
@@ -83,18 +82,18 @@ python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-
 
 ## 6. Oracle SQL Notes
 ```bash
-python -m screener.cli.main init-oracle-schema
+uv run python -m screener.cli.main init-oracle-schema
 ```
 
 - persistence write path는 더 이상 runtime DDL을 수행하지 않습니다.
-- Oracle 저장을 쓰기 전에 `python -m screener.cli.main init-oracle-schema` 를 1회 실행해 schema를 준비해야 합니다.
+- Oracle 저장을 쓰기 전에 `uv run python -m screener.cli.main init-oracle-schema` 를 1회 실행해 schema를 준비해야 합니다.
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
 ## 7. OpenClaw Usage
 - 이 저장소는 cron 정의를 포함하지 않습니다. OpenClaw가 외부에서 명령을 호출하는 전제를 둡니다.
-- 장중 수집은 `python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
-- 장 마감 후 daily run은 `python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
-- Oracle을 쓰는 환경이면 bootstrap 단계에서 `python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
+- 장중 수집은 `uv run python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
+- 장 마감 후 daily run은 `uv run python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
+- Oracle을 쓰는 환경이면 bootstrap 단계에서 `uv run python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
 - OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/alert-events.json` 입니다.
 - daily report JSON/Markdown에는 candidate별 ticker와 company name이 함께 포함됩니다.
 - intraday raw artifact는 daily run 보강용이지만, OpenClaw는 provisional consumer entrypoint `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽을 수 있습니다.

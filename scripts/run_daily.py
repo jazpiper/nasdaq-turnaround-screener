@@ -38,22 +38,24 @@ def venv_python(root: Path) -> Path:
 
 def ensure_venv(root: Path, skip_install: bool = False) -> Path:
     python_path = venv_python(root)
+    if skip_install:
+        if not python_path.exists():
+            builder = venv.EnvBuilder(with_pip=True)
+            builder.create(root / ".venv")
+        return python_path
+
+    uv_path = shutil.which("uv")
+    if uv_path is None:
+        raise RuntimeError("uv is required. Install uv, then run `uv sync --extra dev`.")
+
+    subprocess.run(
+        [uv_path, "sync", "--extra", "dev"],
+        cwd=root,
+        check=True,
+    )
     if not python_path.exists():
         builder = venv.EnvBuilder(with_pip=True)
         builder.create(root / ".venv")
-    if skip_install:
-        return python_path
-
-    subprocess.run(
-        [str(python_path), "-m", "pip", "install", "--upgrade", "pip"],
-        cwd=root,
-        check=True,
-    )
-    subprocess.run(
-        [str(python_path), "-m", "pip", "install", "-e", ".[dev]"],
-        cwd=root,
-        check=True,
-    )
     return python_path
 
 

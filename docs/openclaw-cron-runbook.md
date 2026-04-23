@@ -29,16 +29,14 @@
 
 ```bash
 cd /home/ubuntu/project/nasdaq-turnaround-screener
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
+uv sync --extra dev
 ```
 
 Oracle SQL persistence를 쓸 경우에만 아래를 1회 추가합니다.
 
 ```bash
 cd /home/ubuntu/project/nasdaq-turnaround-screener
-.venv/bin/python -m screener.cli.main init-oracle-schema
+uv run python -m screener.cli.main init-oracle-schema
 ```
 
 ## 4. Secrets And Environment
@@ -226,9 +224,7 @@ repo root:
 
 one-time bootstrap:
 cd /home/ubuntu/project/nasdaq-turnaround-screener
-python -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
+uv sync --extra dev
 
 scheduled jobs:
 - producer 09:40 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id open-1 --skip-install

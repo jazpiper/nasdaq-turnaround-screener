@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from scripts import run_daily
 from scripts.run_daily import LATEST_NAME, dated_output_dir, update_latest_pointer
 
 
@@ -35,3 +36,21 @@ def test_update_latest_pointer_exposes_alert_sidecar(tmp_path: Path) -> None:
     latest_path = update_latest_pointer(output_root, target_dir)
 
     assert (latest_path / "alert-events.json").read_text(encoding="utf-8") == '{"phase":"final"}\n'
+
+
+def test_ensure_venv_installs_with_uv_sync(monkeypatch, tmp_path: Path) -> None:
+    python_path = tmp_path / ".venv" / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.touch()
+    calls: list[tuple[list[str], Path, bool]] = []
+
+    monkeypatch.setattr(run_daily, "venv_python", lambda root: python_path)
+    monkeypatch.setattr(run_daily.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr(
+        run_daily.subprocess,
+        "run",
+        lambda command, cwd, check: calls.append((command, cwd, check)),
+    )
+
+    assert run_daily.ensure_venv(tmp_path) == python_path
+    assert calls == [(["/usr/bin/uv", "sync", "--extra", "dev"], tmp_path, True)]
