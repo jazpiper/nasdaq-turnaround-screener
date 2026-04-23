@@ -4,7 +4,10 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from screener.data import DailyBar
+from screener.indicators.technicals import add_indicator_columns
 from screener.intraday_artifacts import (
     StagedIntradayQuote,
     discover_latest_intraday_snapshot,
@@ -94,3 +97,35 @@ def test_merge_history_with_staged_quote_appends_neutral_volume_for_new_day() ->
     assert merged[-1].trading_date == date(2026, 4, 22)
     assert merged[-1].close == 102
     assert merged[-1].volume == 2000
+
+
+def test_merge_history_with_staged_quote_keeps_volume_ratio_neutral_for_new_day() -> None:
+    history = [
+        DailyBar(
+            "AAPL",
+            date(2026, 4, day),
+            100,
+            101,
+            99,
+            100,
+            100,
+            1000 if day == 1 else 200,
+        )
+        for day in range(1, 21)
+    ]
+    staged_quote = StagedIntradayQuote(
+        ticker='AAPL',
+        timestamp=datetime(2026, 4, 21, 15, 30, tzinfo=timezone.utc),
+        open=100,
+        high=103,
+        low=98,
+        close=102,
+        volume=25,
+        source_path=Path('collected-quotes.json'),
+    )
+
+    merged = merge_history_with_staged_quote(history, staged_quote)
+    indicators = add_indicator_columns(merged)
+
+    assert merged[-1].volume == 200
+    assert indicators[-1]["volume_ratio_20d"] == pytest.approx(1.0)

@@ -76,6 +76,12 @@ def material_signature(candidate: CandidateResult, *, rank: int) -> str:
     )
 
 
+def _has_compatible_material_signature(previous_signature: str | None, current_signature: str) -> bool:
+    if previous_signature is None:
+        return False
+    return previous_signature.count("|") == current_signature.count("|")
+
+
 def _has_single_reason_mix(candidate: CandidateResult) -> bool:
     reasons = candidate.reasons
     has_reversal_reason = any(
@@ -126,6 +132,9 @@ def determine_change_status(
         return "material_change"
     if not has_extended_previous_state:
         return "unchanged"
+    previous_signature = previous_state.get("last_material_signature")
+    if _has_compatible_material_signature(previous_signature, current_signature) and previous_signature != current_signature:
+        return "material_change"
     if _has_state_value(previous_state, "last_headline_reason") and previous_headline_reason != current_headline_reason:
         return "material_change"
     if _has_state_value(previous_state, "last_headline_risk") and previous_headline_risk != current_headline_risk:

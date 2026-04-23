@@ -171,6 +171,27 @@ def test_determine_change_status_keeps_small_score_and_rank_nudge_unchanged() ->
     assert determine_change_status(candidate, rank=2, phase="final", previous_state=previous) == "unchanged"
 
 
+def test_determine_change_status_marks_tier_only_signature_change_as_material_change() -> None:
+    candidate = make_candidate(score=64)
+    previous_candidate = make_candidate(score=64)
+    previous_candidate.tier = "watchlist"
+    previous = {
+        "last_delivery_tier": "single",
+        "last_material_signature": material_signature(previous_candidate, rank=1),
+        "last_score": "64",
+        "last_rank": "1",
+        "last_headline_reason": "BB 하단 근처 또는 재진입 구간",
+        "last_headline_risk": "중기 추세는 아직 하락 압력일 수 있음",
+        "last_earnings_penalty": "0",
+        "last_volatility_penalty": "0",
+        "last_phase": "provisional",
+        "last_emitted_at": "2026-04-22T15:30:00+00:00",
+        "last_dedupe_key": "key-aapl",
+    }
+
+    assert determine_change_status(candidate, rank=1, phase="final", previous_state=previous) == "material_change"
+
+
 def test_determine_change_status_marks_large_score_delta_as_material_change() -> None:
     candidate = make_candidate(score=70)
     previous = {

@@ -114,7 +114,7 @@ def merge_history_with_staged_quote(history: list[DailyBar], staged_quote: Stage
 
 
 def _neutral_staged_volume(history: list[DailyBar]) -> float:
-    recent = history[-20:] if len(history) >= 20 else history
+    recent = history[-19:] if len(history) >= 19 else history
     if not recent:
         return 0.0
     return sum(bar.volume for bar in recent) / len(recent)

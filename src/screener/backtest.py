@@ -351,6 +351,7 @@ def _return_stats(
     ]
     return {
         "count": len(returns),
+        "excess_count": len(excess_returns),
         "average_return_pct": round(fmean(returns), 4) if returns else None,
         "median_return_pct": round(_median(returns), 4) if returns else None,
         "win_rate": round(sum(value > 0 for value in returns) / len(returns), 4) if returns else None,
