@@ -37,6 +37,12 @@ def write_snapshot(root: Path) -> None:
 def test_preferred_intraday_snapshot_provider_overlays_same_day_quote(tmp_path: Path) -> None:
     history = make_history(start_close=180.0)
     history.loc[history.index[-1], 'date'] = date(2026, 4, 21)
+    history.loc[history.index[-1], 'open'] = 110.0
+    history.loc[history.index[-1], 'high'] = 111.0
+    history.loc[history.index[-1], 'low'] = 109.5
+    history.loc[history.index[-1], 'close'] = 110.0
+    history.loc[history.index[-1], 'adj_close'] = 110.0
+    history.loc[history.index[-1], 'volume'] = 2_000_000.0
     base_provider = YFinanceMarketDataProvider(fetcher=StubFetcher({'AAPL': make_bars_from_history('AAPL', history)}))
     write_snapshot(tmp_path)
     provider = PreferredIntradaySnapshotMarketDataProvider(
@@ -52,4 +58,4 @@ def test_preferred_intraday_snapshot_provider_overlays_same_day_quote(tmp_path: 
     latest = merged.sort_values('date').iloc[-1]
     assert float(latest['close']) == 112.0
     assert float(latest['high']) == 113.0
-    assert float(latest['volume']) == 3210000.0
+    assert float(latest['volume']) == 2_000_000.0

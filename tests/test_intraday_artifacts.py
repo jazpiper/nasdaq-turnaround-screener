@@ -46,7 +46,7 @@ def test_discover_latest_intraday_snapshot_picks_latest_completed_run(tmp_path: 
     assert snapshot.quotes_by_ticker['MSFT'].close == 201.5
 
 
-def test_merge_history_with_staged_quote_replaces_same_day_bar() -> None:
+def test_merge_history_with_staged_quote_preserves_same_day_daily_volume() -> None:
     history = [
         DailyBar('AAPL', date(2026, 4, 20), 90, 91, 89, 90.5, 90.5, 1000),
         DailyBar('AAPL', date(2026, 4, 21), 100, 101, 99, 100.5, 100.5, 2000),
@@ -67,4 +67,30 @@ def test_merge_history_with_staged_quote_replaces_same_day_bar() -> None:
     assert len(merged) == 2
     assert merged[-1].trading_date == date(2026, 4, 21)
     assert merged[-1].close == 102
-    assert merged[-1].volume == 2500
+    assert merged[-1].high == 103
+    assert merged[-1].low == 98
+    assert merged[-1].volume == 2000
+
+
+def test_merge_history_with_staged_quote_appends_neutral_volume_for_new_day() -> None:
+    history = [
+        DailyBar('AAPL', date(2026, 4, 20), 90, 91, 89, 90.5, 90.5, 1000),
+        DailyBar('AAPL', date(2026, 4, 21), 100, 101, 99, 100.5, 100.5, 3000),
+    ]
+    staged_quote = StagedIntradayQuote(
+        ticker='AAPL',
+        timestamp=datetime(2026, 4, 22, 15, 30, tzinfo=timezone.utc),
+        open=100,
+        high=103,
+        low=98,
+        close=102,
+        volume=25,
+        source_path=Path('collected-quotes.json'),
+    )
+
+    merged = merge_history_with_staged_quote(history, staged_quote)
+
+    assert len(merged) == 3
+    assert merged[-1].trading_date == date(2026, 4, 22)
+    assert merged[-1].close == 102
+    assert merged[-1].volume == 2000

@@ -20,7 +20,7 @@ from screener.models import (
 )
 from screener.reporting.json_report import build_json_report
 from screener.reporting.markdown import build_markdown_report
-from screener.scoring import rank_candidates
+from screener.scoring import classify_investability_tier, rank_candidates
 from screener.storage.files import ensure_directory, write_json, write_text
 
 from .context import fetch_benchmark_context, merge_benchmark_context, merge_earnings_context, normalize_generated_at
@@ -46,18 +46,27 @@ class RankedCandidateScorer:
             return None
 
         candidate = ranked[0]
+        indicator_snapshot = build_indicator_snapshot(candidate.snapshot)
+        tier = classify_investability_tier(
+            score=candidate.score,
+            subscores=candidate.subscores,
+            risks=candidate.risks,
+            snapshot=indicator_snapshot,
+        )
         return CandidateResult(
             ticker=candidate.ticker,
             name=ticker.name,
             score=candidate.score,
             subscores=ScoreBreakdown(**candidate.subscores),
+            tier=tier.tier,
+            tier_reasons=tier.reasons,
             close=_maybe_float(candidate.snapshot.get("close")),
             lower_bb=_maybe_float(candidate.snapshot.get("bb_lower")),
             rsi14=_maybe_float(candidate.snapshot.get("rsi_14")),
             distance_to_20d_low=_maybe_float(candidate.snapshot.get("distance_to_20d_low")),
             reasons=candidate.reasons,
             risks=candidate.risks,
-            indicator_snapshot=build_indicator_snapshot(candidate.snapshot),
+            indicator_snapshot=indicator_snapshot,
             snapshot_schema_version=INDICATOR_SNAPSHOT_SCHEMA_VERSION,
             generated_at=context.generated_at,
         )

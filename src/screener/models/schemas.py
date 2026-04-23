@@ -26,6 +26,8 @@ class CandidateResult(BaseModel):
     name: str | None = None
     score: int
     subscores: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
+    tier: str = "watchlist"
+    tier_reasons: list[str] = Field(default_factory=list)
     close: float | None = None
     lower_bb: float | None = None
     rsi14: float | None = None
