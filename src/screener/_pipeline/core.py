@@ -181,10 +181,20 @@ class ScreenPipeline:
 
         artifacts = RunArtifacts()
         if not context.dry_run:
-            artifacts = self._write_artifacts(result, context.output_dir)
+            artifacts = self._write_artifacts(
+                result,
+                context.output_dir,
+                benchmark_context=benchmark_context,
+            )
         return result, artifacts
 
-    def _write_artifacts(self, result: ScreenRunResult, output_dir: Path) -> RunArtifacts:
+    def _write_artifacts(
+        self,
+        result: ScreenRunResult,
+        output_dir: Path,
+        *,
+        benchmark_context: dict[str, Any] | None = None,
+    ) -> RunArtifacts:
         ensure_directory(output_dir)
         markdown_path = write_text(
             output_dir / self.settings.markdown_report_name,
@@ -208,6 +218,7 @@ class ScreenPipeline:
                 artifact_directory=str(output_dir),
                 report_path=str(json_report_path),
                 metadata_path=str(metadata_path),
+                benchmark_context=benchmark_context,
             )
             run_alert_path, stable_alert_path = build_daily_alert_paths(output_dir, latest_dir)
             write_alert_document(run_alert_path, stable_alert_path, document)
