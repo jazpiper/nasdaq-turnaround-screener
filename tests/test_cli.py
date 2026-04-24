@@ -146,6 +146,17 @@ class StubBacktestRunner:
         return summary, artifacts
 
 
+class RecordingTuningBacktestRunner:
+    called = False
+
+    def __init__(self, settings):
+        self.settings = settings
+
+    def generate_observations(self, *, start_date, end_date, forward_horizons):
+        RecordingTuningBacktestRunner.called = True
+        return [], [], 0
+
+
 class StubCollector:
     def __init__(self, settings):
         self.settings = settings
@@ -345,6 +356,48 @@ def test_backtest_writes_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert "Candidate observations: 2" in result.stdout
     assert (tmp_path / "backtest-summary.json").exists()
     assert (tmp_path / "backtest-observations.csv").exists()
+
+
+def test_tune_rejects_forward_horizon_missing_from_collected_horizons(tmp_path: Path, monkeypatch) -> None:
+    RecordingTuningBacktestRunner.called = False
+    monkeypatch.setattr("screener.cli.main.HistoricalBacktestRunner", RecordingTuningBacktestRunner)
+
+    result = runner.invoke(
+        app,
+        [
+            "tune",
+            "--start-date",
+            "2026-04-01",
+            "--end-date",
+            "2026-04-21",
+            "--output-dir",
+            str(tmp_path),
+            "--forward-horizon",
+            "20",
+            "--horizons",
+            "5,10",
+        ],
+    )
+
+    output = result.stdout + result.stderr
+    assert result.exit_code != 0
+    assert "Forward horizon T+20 is not included in --horizons (5, 10)" in output
+    assert RecordingTuningBacktestRunner.called is False
+
+
+def test_openclaw_docs_do_not_pass_unsupported_flags_to_commands() -> None:
+    docs = [
+        Path("docs/openclaw-cron-runbook.md"),
+        Path("docs/operations.md"),
+    ]
+
+    for doc_path in docs:
+        content = doc_path.read_text(encoding="utf-8")
+        for line in content.splitlines():
+            if "screener.cli.main tune" in line:
+                assert "--skip-install" not in line, f"{doc_path} passes unsupported --skip-install to tune"
+                assert "--dry-run" not in line, f"{doc_path} passes unsupported --dry-run to tune"
+        assert "apply_tuning_proposal.py --dry-run" not in content, f"{doc_path} advertises unsupported apply --dry-run"
 
 
 

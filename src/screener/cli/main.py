@@ -232,6 +232,13 @@ def tune(
     parsed_start = parse_run_date(start_date)
     parsed_end = parse_run_date(end_date)
     parsed_horizons = parse_horizons(horizons)
+    if forward_horizon not in parsed_horizons:
+        collected = ", ".join(str(horizon) for horizon in parsed_horizons)
+        typer.echo(
+            f"Forward horizon T+{forward_horizon} is not included in --horizons ({collected}).",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     typer.echo(f"Collecting backtest observations ({start_date} → {end_date})…")
     runner = HistoricalBacktestRunner(settings=settings)

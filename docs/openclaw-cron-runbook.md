@@ -142,7 +142,7 @@ CRON_TZ=America/New_York
 
 # monthly threshold tuning — 매월 첫 월요일 17:30 ET (장 마감 후)
 # proposal JSON만 생성. tiering.py 반영은 사람이 검토 후 수동으로 수행.
-30 17 1-7 * 1 cd /home/ubuntu/project/nasdaq-turnaround-screener && uv run python -m screener.cli.main tune --start-date $(TZ=America/New_York date -d "6 months ago" +\%F) --end-date $(TZ=America/New_York date +\%F) --output-dir output/tuning --skip-install 2>&1 | tee -a output/tuning/tune-cron.log
+30 17 1-7 * 1 cd /home/ubuntu/project/nasdaq-turnaround-screener && uv run python -m screener.cli.main tune --start-date $(TZ=America/New_York date -d "6 months ago" +\%F) --end-date $(TZ=America/New_York date +\%F) --output-dir output/tuning 2>&1 | tee -a output/tuning/tune-cron.log
 
 # daily consumer retries
 35,40,45 16 * * 1-5 /path/to/openclaw-daily-consumer

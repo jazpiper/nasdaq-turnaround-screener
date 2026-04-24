@@ -133,3 +133,25 @@ def test_parse_current_from_file_reads_actual_constants() -> None:
     assert current["min_reversal"] == BUY_REVIEW_MIN_REVERSAL
     assert current["min_volume_ratio"] == BUY_REVIEW_MIN_VOLUME_RATIO
     assert current["max_risk_count"] == BUY_REVIEW_MAX_RISK_COUNT
+
+
+def test_run_tests_uses_uv_with_dev_dependencies(monkeypatch) -> None:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("apply_tuning_proposal", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    calls: list[tuple[list[str], Path]] = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command: list[str], *, cwd: Path):
+        calls.append((command, cwd))
+        return Completed()
+
+    root = Path("/repo")
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+    assert mod.run_tests(root) is True
+    assert calls == [(["uv", "run", "--extra", "dev", "pytest", "-q"], root)]

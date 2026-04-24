@@ -40,6 +40,7 @@ class ThresholdsStability:
     thresholds: TierThresholds
     win_count: int
     window_indices: list[int]
+    valid_eval_count: int
     avg_eval_excess_return: float | None
 
 
@@ -157,6 +158,7 @@ def _compute_stability(windows: list[WindowResult]) -> list[ThresholdsStability]
                 thresholds=t,
                 win_count=len(win_indices),
                 window_indices=win_indices,
+                valid_eval_count=len(eval_returns.get(t, [])),
                 avg_eval_excess_return=avg,
             )
         )
@@ -164,6 +166,7 @@ def _compute_stability(windows: list[WindowResult]) -> list[ThresholdsStability]
     stability.sort(
         key=lambda s: (
             -s.win_count,
+            -s.valid_eval_count,
             -(s.avg_eval_excess_return if s.avg_eval_excess_return is not None else float("-inf")),
         )
     )
@@ -172,6 +175,6 @@ def _compute_stability(windows: list[WindowResult]) -> list[ThresholdsStability]
 
 def _select_proposal(stability: list[ThresholdsStability], min_wins: int) -> TierThresholds | None:
     for entry in stability:
-        if entry.win_count >= min_wins:
+        if entry.win_count >= min_wins and entry.valid_eval_count >= min_wins:
             return entry.thresholds
     return None

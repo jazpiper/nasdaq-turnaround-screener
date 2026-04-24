@@ -153,6 +153,7 @@ def write_walkforward_json(
         {
             "thresholds": _thresholds_dict(s.thresholds),
             "win_count": s.win_count,
+            "valid_eval_count": s.valid_eval_count,
             "window_indices": s.window_indices,
             "avg_eval_excess_return": s.avg_eval_excess_return,
         }
@@ -188,7 +189,7 @@ def write_proposal_json_from_walkforward(
     if result.proposal is None:
         payload: dict = {
             "status": "no_proposal",
-            "reason": f"no combination won >= {result.min_wins} walk-forward windows",
+            "reason": _walkforward_no_proposal_reason(result),
             "horizon": result.horizon,
             "generated_at": ts,
             "current": _thresholds_dict(current),
@@ -210,6 +211,7 @@ def write_proposal_json_from_walkforward(
         "diff": diff,
         "stability": {
             "win_count": best_stability.win_count,
+            "valid_eval_count": best_stability.valid_eval_count,
             "walk_forward_window_count": len(result.windows),
             "avg_eval_excess_return_pct": best_stability.avg_eval_excess_return,
             "window_indices": best_stability.window_indices,
@@ -226,9 +228,7 @@ def write_diff_markdown_from_walkforward(path: Path, result: WalkForwardResult) 
     lines.append(f"**Horizon**: T+{result.horizon}  |  **Windows**: {len(result.windows)}\n")
 
     if result.proposal is None:
-        lines.append(
-            f"**Status**: no proposal — no combination won >= {result.min_wins} walk-forward windows.\n"
-        )
+        lines.append(f"**Status**: no proposal — {_walkforward_no_proposal_reason(result)}.\n")
         return write_text(path, "\n".join(lines))
 
     best_stability = next(s for s in result.stability if s.thresholds == result.proposal)
@@ -273,6 +273,26 @@ def _thresholds_dict(t: TierThresholds) -> dict:
         "min_volume_ratio": t.min_volume_ratio,
         "max_risk_count": t.max_risk_count,
     }
+
+
+def _walkforward_no_proposal_reason(result: WalkForwardResult) -> str:
+    if not result.stability:
+        return f"no combination won >= {result.min_wins} walk-forward windows"
+
+    best = result.stability[0]
+    if best.win_count < result.min_wins:
+        return f"best combination won {best.win_count}/{result.min_wins} required walk-forward windows"
+
+    if best.valid_eval_count < result.min_wins:
+        return (
+            "best combination had only "
+            f"{best.valid_eval_count}/{result.min_wins} required valid out-of-sample windows"
+        )
+
+    return (
+        f"no combination met both >= {result.min_wins} walk-forward wins and "
+        f">= {result.min_wins} valid out-of-sample windows"
+    )
 
 
 def _build_diff(current: TierThresholds, proposed: TierThresholds) -> dict:

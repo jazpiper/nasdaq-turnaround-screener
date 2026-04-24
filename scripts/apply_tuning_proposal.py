@@ -99,7 +99,7 @@ def print_diff(current: dict, proposed: dict) -> None:
 
 def run_tests(root: Path) -> bool:
     result = subprocess.run(
-        ["uv", "run", "pytest", "-q"],
+        ["uv", "run", "--extra", "dev", "pytest", "-q"],
         cwd=root,
     )
     return result.returncode == 0
