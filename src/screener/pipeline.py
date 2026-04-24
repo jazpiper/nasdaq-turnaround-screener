@@ -14,6 +14,7 @@ from screener._pipeline.context import (
 )
 from screener._pipeline.contracts import CandidateScorer, IndicatorEngine, MarketDataProvider, UniverseProvider
 from screener._pipeline.core import RankedCandidateScorer, ScreenPipeline, build_context
+from screener.scoring import TierThresholds
 from screener._pipeline.providers import (
     PreferredIntradaySnapshotMarketDataProvider,
     StaticUniverseProvider,
@@ -41,6 +42,7 @@ __all__ = [
     "RankedCandidateScorer",
     "ScreenPipeline",
     "StaticUniverseProvider",
+    "TierThresholds",
     "TRADING_TIMEZONE",
     "TRADING_TIMEZONE_NAME",
     "TechnicalIndicatorEngine",

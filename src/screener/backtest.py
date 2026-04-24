@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from datetime import date
 from io import StringIO
 from pathlib import Path
@@ -37,6 +38,9 @@ class BacktestObservation:
     risks: list[str]
     forward_returns: dict[int, float | None]
     benchmark_forward_returns: dict[int, float | None]
+    # stored for tuning-loop re-classification without re-running scoring
+    subscores: dict[str, int] = dataclasses_field(default_factory=dict)
+    snapshot: dict[str, Any] = dataclasses_field(default_factory=dict)
 
     def as_row(self, forward_horizons: tuple[int, ...]) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -83,22 +87,28 @@ class HistoricalBacktestRunner:
         self.earnings_calendar_provider = earnings_calendar_provider or build_earnings_calendar_provider(settings)
         self.benchmark_market_data_provider = benchmark_market_data_provider or build_market_data_provider(settings)
 
-    def run(
+    def generate_observations(
         self,
         *,
         start_date: date,
         end_date: date,
-        output_dir: Path,
+        output_dir: Path | None = None,
         forward_horizons: tuple[int, ...] = DEFAULT_FORWARD_HORIZONS,
-        dry_run: bool = False,
-    ) -> tuple[dict[str, Any], BacktestArtifacts]:
+    ) -> tuple[list[BacktestObservation], list[str], int]:
+        """Score all universe tickers for each trading day and return observations.
+
+        Returns (observations, data_failures, trading_day_count).
+        Separated from run() so the tuning loop can reuse observations without
+        writing backtest artifacts.
+        """
         if end_date < start_date:
             raise ValueError("end_date must be on or after start_date")
 
+        resolved_output_dir = self.settings.output_dir if output_dir is None else Path(output_dir)
         base_context = build_context(
             run_date=end_date,
             dry_run=True,
-            output_dir=output_dir,
+            output_dir=resolved_output_dir,
             run_mode="backtest",
             universe_name=self.settings.universe_name,
         )
@@ -118,7 +128,7 @@ class HistoricalBacktestRunner:
                 run_date=run_date,
                 generated_at=base_context.generated_at,
                 dry_run=True,
-                output_dir=output_dir,
+                output_dir=resolved_output_dir,
                 run_mode="backtest",
                 universe_name=base_context.universe_name,
             )
@@ -159,14 +169,33 @@ class HistoricalBacktestRunner:
                             run_date,
                             forward_horizons,
                         ),
+                        subscores=_candidate_subscores(candidate),
+                        snapshot=_candidate_snapshot(candidate),
                     )
                 )
 
         observations.sort(key=lambda item: (item.run_date, -item.score, item.ticker))
+        return observations, data_failures, len(trading_dates)
+
+    def run(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        output_dir: Path,
+        forward_horizons: tuple[int, ...] = DEFAULT_FORWARD_HORIZONS,
+        dry_run: bool = False,
+    ) -> tuple[dict[str, Any], BacktestArtifacts]:
+        observations, data_failures, trading_day_count = self.generate_observations(
+            start_date=start_date,
+            end_date=end_date,
+            output_dir=output_dir,
+            forward_horizons=forward_horizons,
+        )
         summary = {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "trading_day_count": len(trading_dates),
+            "trading_day_count": trading_day_count,
             "candidate_observation_count": len(observations),
             "forward_horizons": list(forward_horizons),
             "forward_return_summary": _summarize_forward_returns(observations, forward_horizons),
@@ -266,6 +295,24 @@ def _compute_forward_returns(
         future_close = float(history.iloc[target_index]["close"])
         returns[horizon] = ((future_close / base_close) - 1.0) * 100.0
     return returns
+
+
+def _candidate_subscores(candidate: Any) -> dict[str, int]:
+    subscores = getattr(candidate, "subscores", None)
+    if subscores is None:
+        return {}
+
+    model_dump = getattr(subscores, "model_dump", None)
+    if callable(model_dump):
+        return dict(model_dump(mode="json"))
+    return dict(subscores)
+
+
+def _candidate_snapshot(candidate: Any) -> dict[str, Any]:
+    snapshot = getattr(candidate, "indicator_snapshot", None)
+    if snapshot is None:
+        return {}
+    return dict(snapshot)
 
 
 def _summarize_forward_returns(

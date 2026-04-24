@@ -4,6 +4,7 @@ from .tiering import (
     BUY_REVIEW_TIER,
     WATCHLIST_TIER,
     TierDecision,
+    TierThresholds,
     classify_investability_tier,
 )
 
@@ -12,6 +13,7 @@ __all__ = [
     "BUY_REVIEW_TIER",
     "ScreenCandidate",
     "TierDecision",
+    "TierThresholds",
     "WATCHLIST_TIER",
     "classify_investability_tier",
     "filter_candidates",

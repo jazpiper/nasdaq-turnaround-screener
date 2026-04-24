@@ -20,7 +20,7 @@ from screener.models import (
 )
 from screener.reporting.json_report import build_json_report
 from screener.reporting.markdown import build_markdown_report
-from screener.scoring import classify_investability_tier, rank_candidates
+from screener.scoring import TierThresholds, classify_investability_tier, rank_candidates
 from screener.storage.files import ensure_directory, write_json, write_text
 
 from .context import fetch_benchmark_context, merge_benchmark_context, merge_earnings_context, normalize_generated_at
@@ -35,6 +35,9 @@ from .snapshot import INDICATOR_SNAPSHOT_SCHEMA_VERSION, _maybe_float, build_ind
 
 
 class RankedCandidateScorer:
+    def __init__(self, tier_thresholds: TierThresholds | None = None) -> None:
+        self.tier_thresholds = tier_thresholds
+
     def evaluate(
         self,
         ticker: TickerInput,
@@ -52,6 +55,7 @@ class RankedCandidateScorer:
             subscores=candidate.subscores,
             risks=candidate.risks,
             snapshot=indicator_snapshot,
+            thresholds=self.tier_thresholds,
         )
         return CandidateResult(
             ticker=candidate.ticker,
