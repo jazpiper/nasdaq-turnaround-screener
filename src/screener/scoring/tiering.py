@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
 BUY_REVIEW_TIER = "buy-review"
@@ -14,9 +14,26 @@ BUY_REVIEW_MAX_RISK_COUNT = 3
 
 
 @dataclass(frozen=True)
+class TierThresholds:
+    """Tunable cut-offs for buy-review tier classification.
+
+    Defaults match the hard-coded constants so existing behaviour is unchanged
+    when no explicit instance is supplied.
+    """
+
+    min_score: int = BUY_REVIEW_MIN_SCORE
+    min_reversal: int = BUY_REVIEW_MIN_REVERSAL
+    min_volume_ratio: float = BUY_REVIEW_MIN_VOLUME_RATIO
+    max_risk_count: int = BUY_REVIEW_MAX_RISK_COUNT
+
+
+@dataclass(frozen=True)
 class TierDecision:
     tier: str
     reasons: list[str]
+
+
+_DEFAULT_THRESHOLDS = TierThresholds()
 
 
 def classify_investability_tier(
@@ -25,8 +42,10 @@ def classify_investability_tier(
     subscores: Mapping[str, int],
     risks: Sequence[str],
     snapshot: Mapping[str, object],
+    thresholds: TierThresholds | None = None,
 ) -> TierDecision:
     """Separate broad turnaround discovery from candidates worth buy review."""
+    t = thresholds if thresholds is not None else _DEFAULT_THRESHOLDS
     earnings_penalty = int(snapshot.get("earnings_penalty", 0) or 0)
     volatility_penalty = int(snapshot.get("volatility_penalty", 0) or 0)
     severe_weekly_penalty = int(snapshot.get("severe_weekly_penalty", 0) or 0)
@@ -47,13 +66,13 @@ def classify_investability_tier(
         return TierDecision(AVOID_HIGH_RISK_TIER, high_risk_reasons)
 
     missing_buy_review: list[str] = []
-    if score < BUY_REVIEW_MIN_SCORE:
+    if score < t.min_score:
         missing_buy_review.append("score below buy-review threshold")
-    if reversal_score < BUY_REVIEW_MIN_REVERSAL:
+    if reversal_score < t.min_reversal:
         missing_buy_review.append("reversal evidence is not strong enough")
-    if volume_ratio is None or volume_ratio < BUY_REVIEW_MIN_VOLUME_RATIO:
+    if volume_ratio is None or volume_ratio < t.min_volume_ratio:
         missing_buy_review.append("volume confirmation is not strong enough")
-    if risk_count > BUY_REVIEW_MAX_RISK_COUNT:
+    if risk_count > t.max_risk_count:
         missing_buy_review.append("risk count is above buy-review limit")
 
     if missing_buy_review:

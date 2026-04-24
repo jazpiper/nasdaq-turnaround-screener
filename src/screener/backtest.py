@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
 from datetime import date
 from io import StringIO
 from pathlib import Path
@@ -37,6 +38,9 @@ class BacktestObservation:
     risks: list[str]
     forward_returns: dict[int, float | None]
     benchmark_forward_returns: dict[int, float | None]
+    # stored for tuning-loop re-classification without re-running scoring
+    subscores: dict[str, int] = dataclasses_field(default_factory=dict)
+    snapshot: dict[str, Any] = dataclasses_field(default_factory=dict)
 
     def as_row(self, forward_horizons: tuple[int, ...]) -> dict[str, Any]:
         row: dict[str, Any] = {
@@ -159,6 +163,8 @@ class HistoricalBacktestRunner:
                             run_date,
                             forward_horizons,
                         ),
+                        subscores=dict(candidate.subscores) if hasattr(candidate, "subscores") else {},
+                        snapshot=dict(candidate.indicator_snapshot) if hasattr(candidate, "indicator_snapshot") else {},
                     )
                 )
 
