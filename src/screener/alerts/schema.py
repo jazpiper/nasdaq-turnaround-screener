@@ -18,6 +18,9 @@ class AlertSummary(BaseModel):
     digest_event_count: int
     suppressed_candidate_count: int
     quality_gate: str
+    regime_gate: str = "unknown"
+    regime_watchlist_cap: int | None = None
+    regime_gate_reason: str | None = None
 
 
 class AlertEvent(BaseModel):

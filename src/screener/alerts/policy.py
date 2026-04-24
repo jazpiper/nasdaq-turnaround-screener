@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from screener.models import CandidateResult, RunMetadata
 from screener.scoring import AVOID_HIGH_RISK_TIER, BUY_REVIEW_TIER, WATCHLIST_TIER
 
@@ -26,6 +28,37 @@ _EXTENDED_STATE_KEYS = {
     "last_earnings_penalty",
     "last_volatility_penalty",
 }
+REGIME_QQQ_RETURN_THRESHOLD = -5.0
+REGIME_WATCHLIST_CAP = 3
+
+
+@dataclass(frozen=True)
+class RegimeDecision:
+    status: str
+    is_bearish: bool
+    watchlist_cap: int | None
+    reason: str | None = None
+
+
+def evaluate_regime_gate(
+    *,
+    qqq_below_20d_ma: bool | None,
+    qqq_return_20d: float | None,
+) -> RegimeDecision:
+    if qqq_below_20d_ma is None or qqq_return_20d is None:
+        return RegimeDecision(
+            status="unknown",
+            is_bearish=False,
+            watchlist_cap=None,
+            reason="missing_benchmark_context",
+        )
+    bearish = qqq_below_20d_ma and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
+    return RegimeDecision(
+        status="capped" if bearish else "pass",
+        is_bearish=bearish,
+        watchlist_cap=REGIME_WATCHLIST_CAP if bearish else None,
+        reason="bearish_qqq_regime" if bearish else "conditions_not_met",
+    )
 
 
 def _has_state_value(previous_state: dict[str, str | None], key: str) -> bool:

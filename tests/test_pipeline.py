@@ -229,6 +229,106 @@ def test_pipeline_writes_daily_alert_sidecar(tmp_path: Path) -> None:
     assert state.tickers == {}
 
 
+def test_pipeline_passes_benchmark_context_to_alert_builder(tmp_path: Path) -> None:
+    from datetime import date as dt_date
+
+    from screener.models import CandidateResult, ScoreBreakdown
+    from screener.scoring import WATCHLIST_TIER
+
+    output_dir = tmp_path / "daily"
+    run_date = dt_date(2026, 3, 31)
+    tickers = [TickerInput(ticker=f"T{i:02d}") for i in range(100)]
+    stock_history = make_history(start_close=180.0)
+
+    class _LargeUniverseProvider:
+        def load_universe(self, context):
+            return tickers
+
+    class _StubMarketDataProvider:
+        def prepare(self, requested_tickers, context):
+            return None
+
+        def fetch_history(self, ticker, context):
+            return stock_history
+
+    class _StubBenchmarkProvider:
+        def fetch_history(self, ticker, context):
+            closes = [110.0] * 15 + [100.0] * 10
+            rows = [
+                {
+                    "date": dt_date(2026, 3, 7) + timedelta(days=i),
+                    "open": c,
+                    "high": c,
+                    "low": c,
+                    "close": c,
+                    "adj_close": c,
+                    "volume": 2_000_000.0,
+                }
+                for i, c in enumerate(closes)
+            ]
+            return pd.DataFrame(rows)
+
+    class _StubCandidateScorer:
+        def evaluate(self, ticker, indicators, context):
+            index = int(ticker.ticker.removeprefix("T"))
+            if index >= 6:
+                return None
+            return CandidateResult(
+                ticker=ticker.ticker,
+                name=None,
+                score=57 - index,
+                subscores=ScoreBreakdown(
+                    oversold=18,
+                    bottom_context=14,
+                    reversal=12,
+                    volume=5,
+                    market_context=5,
+                ),
+                tier=WATCHLIST_TIER,
+                tier_reasons=["score below buy-review threshold"],
+                reasons=["BB 하단 근처 또는 재진입 구간", "5일선 회복 또는 회복 시도"],
+                risks=["중기 추세는 아직 하락 압력일 수 있음"],
+                indicator_snapshot={"earnings_penalty": 0, "volatility_penalty": 0},
+                generated_at=context.generated_at,
+            )
+
+    class _EmptyEarningsProvider:
+        def fetch(self, requested_tickers, run_date):
+            return {}
+
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=output_dir),
+        universe_provider=_LargeUniverseProvider(),
+        market_data_provider=_StubMarketDataProvider(),
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=_StubCandidateScorer(),
+        earnings_calendar_provider=_EmptyEarningsProvider(),
+        benchmark_market_data_provider=_StubBenchmarkProvider(),
+    )
+    context = build_context(
+        run_date=run_date,
+        generated_at=datetime(2026, 3, 31, 20, 0, tzinfo=timezone.utc),
+        output_dir=output_dir,
+    )
+
+    _, artifacts = pipeline.run(context)
+
+    assert artifacts.stable_alert_events_path is not None
+    payload = json.loads(artifacts.stable_alert_events_path.read_text(encoding="utf-8"))
+    assert payload["summary"]["quality_gate"] == "pass"
+    assert payload["summary"]["regime_gate"] == "capped"
+    assert payload["summary"]["regime_watchlist_cap"] == 3
+    assert payload["summary"]["suppressed_candidate_count"] == 3
+    digest_events = [event for event in payload["events"] if event["event_type"] == "digest_alert"]
+    assert len(digest_events) == 1
+    assert digest_events[0]["payload"]["member_count"] == 3
+    assert [member["ticker"] for member in digest_events[0]["payload"]["members"]] == [
+        "T00",
+        "T01",
+        "T02",
+    ]
+
+
 def test_pipeline_raises_alert_sidecar_error_after_writing_raw_artifacts(tmp_path: Path, monkeypatch) -> None:
     histories = {
         "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
@@ -418,3 +518,93 @@ def test_percent_return_handles_zero_or_missing_history() -> None:
     assert _percent_return([100.0, 110.0], 5) is None
     assert _percent_return([0.0, 1.0, 2.0], 2) is None
     assert _percent_return([100.0, 105.0, 110.0], 2) == pytest.approx(10.0)
+
+
+def test_fetch_benchmark_context_sets_above_ma_true_when_close_above_sma() -> None:
+    from screener._pipeline.context import fetch_benchmark_context
+    from screener.models import PipelineContext
+
+    closes = [100.0] * 15 + [110.0] * 10
+    rows = [
+        {
+            "date": date(2026, 1, 1) + timedelta(days=i),
+            "open": c,
+            "high": c,
+            "low": c,
+            "close": c,
+            "adj_close": c,
+            "volume": 1e6,
+        }
+        for i, c in enumerate(closes)
+    ]
+    df = pd.DataFrame(rows)
+
+    class _StubProvider:
+        def fetch_history(self, ticker, context):
+            return df
+
+    ctx = PipelineContext(run_date=date(2026, 1, 26), generated_at=datetime(2026, 1, 26, 20, 0))
+    result = fetch_benchmark_context(_StubProvider(), ctx)
+
+    assert result["qqq_above_20d_ma"] is True
+    assert result["qqq_below_20d_ma"] is False
+
+
+def test_fetch_benchmark_context_sets_above_ma_false_when_close_below_sma() -> None:
+    from screener._pipeline.context import fetch_benchmark_context
+    from screener.models import PipelineContext
+
+    closes = [110.0] * 15 + [100.0] * 10
+    rows = [
+        {
+            "date": date(2026, 1, 1) + timedelta(days=i),
+            "open": c,
+            "high": c,
+            "low": c,
+            "close": c,
+            "adj_close": c,
+            "volume": 1e6,
+        }
+        for i, c in enumerate(closes)
+    ]
+    df = pd.DataFrame(rows)
+
+    class _StubProvider:
+        def fetch_history(self, ticker, context):
+            return df
+
+    ctx = PipelineContext(run_date=date(2026, 1, 26), generated_at=datetime(2026, 1, 26, 20, 0))
+    result = fetch_benchmark_context(_StubProvider(), ctx)
+
+    assert result["qqq_above_20d_ma"] is False
+    assert result["qqq_below_20d_ma"] is True
+
+
+def test_fetch_benchmark_context_marks_equal_sma_as_not_below() -> None:
+    from screener._pipeline.context import fetch_benchmark_context
+    from screener.models import PipelineContext
+
+    closes = [100.0] * 25
+    rows = [
+        {
+            "date": date(2026, 1, 1) + timedelta(days=i),
+            "open": c,
+            "high": c,
+            "low": c,
+            "close": c,
+            "adj_close": c,
+            "volume": 1e6,
+        }
+        for i, c in enumerate(closes)
+    ]
+    df = pd.DataFrame(rows)
+
+    class _StubProvider:
+        def fetch_history(self, ticker, context):
+            return df
+
+    ctx = PipelineContext(run_date=date(2026, 1, 26), generated_at=datetime(2026, 1, 26, 20, 0))
+    result = fetch_benchmark_context(_StubProvider(), ctx)
+
+    assert result["qqq_above_20d_ma"] is False
+    assert result["qqq_below_20d_ma"] is False

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from hashlib import sha1
+from typing import Any
 
 from screener.alerts.policy import (
     classify_candidate,
     determine_change_status,
     evaluate_daily_quality_gate,
     evaluate_intraday_quality_gate,
+    evaluate_regime_gate,
     headline_reason,
     headline_risk,
     material_signature,
@@ -14,6 +16,7 @@ from screener.alerts.policy import (
 from screener.alerts.schema import AlertDocument, AlertEvent, AlertSource, AlertSummary
 from screener.alerts.state import AlertState, DigestAlertState, TickerAlertState
 from screener.models import ScreenRunResult
+from screener.scoring import WATCHLIST_TIER
 
 
 def build_daily_alert_document(
@@ -23,8 +26,14 @@ def build_daily_alert_document(
     artifact_directory: str,
     report_path: str,
     metadata_path: str,
+    benchmark_context: dict[str, Any] | None = None,
 ) -> tuple[AlertDocument, AlertState]:
     quality_gate = evaluate_daily_quality_gate(result.metadata)
+    _bc = benchmark_context or {}
+    regime = evaluate_regime_gate(
+        qqq_below_20d_ma=_bc.get("qqq_below_20d_ma"),
+        qqq_return_20d=_bc.get("qqq_return_20d"),
+    )
     events: list[AlertEvent] = []
     next_tickers: dict[str, TickerAlertState] = {}
     digest_members: list[dict[str, object]] = []
@@ -100,6 +109,23 @@ def build_daily_alert_document(
                 last_volatility_penalty=int((candidate.indicator_snapshot or {}).get("volatility_penalty", 0) or 0),
             )
 
+    capped_watchlist_tickers: set[str] = set()
+    if regime.watchlist_cap is not None:
+        kept_members: list[dict[str, object]] = []
+        watchlist_seen = 0
+        for member in digest_members:
+            if member["tier"] != WATCHLIST_TIER:
+                kept_members.append(member)
+                continue
+            watchlist_seen += 1
+            if watchlist_seen <= regime.watchlist_cap:
+                kept_members.append(member)
+            else:
+                capped_watchlist_tickers.add(str(member["ticker"]))
+        digest_members = kept_members
+        for ticker in capped_watchlist_tickers:
+            next_tickers.pop(ticker, None)
+
     digest_state: DigestAlertState | None = state.digest
     if digest_members:
         digest_signature = sha1(repr(digest_members).encode("utf-8")).hexdigest()[:8]
@@ -149,6 +175,9 @@ def build_daily_alert_document(
             digest_event_count=len([event for event in emitted_events if event.event_type == "digest_alert"]),
             suppressed_candidate_count=len(result.candidates) - len(next_tickers),
             quality_gate=quality_gate,
+            regime_gate=regime.status,
+            regime_watchlist_cap=regime.watchlist_cap,
+            regime_gate_reason=regime.reason,
         ),
         events=emitted_events,
     )
