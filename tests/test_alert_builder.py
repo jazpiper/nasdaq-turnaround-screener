@@ -70,6 +70,20 @@ def test_build_daily_alert_document_marks_single_events_warning_and_includes_sou
     assert next_state.tickers["AAPL"].last_delivery_tier == "single"
 
 
+def test_build_daily_alert_document_defaults_regime_gate_to_unknown() -> None:
+    document, _ = build_daily_alert_document(
+        make_result([make_candidate()], bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+    )
+
+    assert document.summary.regime_gate == "unknown"
+    assert document.summary.regime_watchlist_cap is None
+    assert document.summary.regime_gate_reason is None
+
+
 def test_build_daily_alert_document_keeps_prior_state_when_quality_gate_blocks() -> None:
     prior_state = AlertState(
         run_date="2026-04-22",
