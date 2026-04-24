@@ -14,18 +14,18 @@
 
 | 파일 | 역할 |
 |------|------|
-| `src/screener/_pipeline/context.py` | `fetch_benchmark_context`에 `qqq_above_20d_ma` 추가 |
+| `src/screener/_pipeline/context.py` | `fetch_benchmark_context`에 `qqq_below_20d_ma` 추가 |
 | `src/screener/alerts/policy.py` | `RegimeDecision` 데이터클래스 + `evaluate_regime_gate` 신설 |
 | `src/screener/alerts/schema.py` | `AlertSummary`에 `regime_gate`, `regime_watchlist_cap`, `regime_gate_reason` 필드 추가 |
 | `src/screener/alerts/builder.py` | `benchmark_context` 파라미터 수용, stable-order regime cap 적용, capped-out watchlist를 state/suppressed count에 반영 |
 | `src/screener/_pipeline/core.py` | daily final `_write_artifacts`로 `benchmark_context` 전달 후 builder 호출에 전달 |
-| `tests/test_pipeline.py` | `qqq_above_20d_ma` 단위 테스트 + integration 검증 |
+| `tests/test_pipeline.py` | `qqq_below_20d_ma` 단위 테스트 + integration 검증 |
 | `tests/test_alert_policy.py` | `evaluate_regime_gate` 단위 테스트 3개 |
 | `tests/test_alert_builder.py` | regime cap 적용 builder 테스트 2개 |
 
 ---
 
-## Task 1: `qqq_above_20d_ma` 플래그 추가
+## Task 1: `qqq_below_20d_ma` 플래그 추가
 
 **Files:**
 - Modify: `src/screener/_pipeline/context.py`
@@ -57,6 +57,7 @@ def test_fetch_benchmark_context_sets_above_ma_true_when_close_above_sma() -> No
     result = fetch_benchmark_context(_StubProvider(), ctx)
 
     assert result["qqq_above_20d_ma"] is True
+    assert result["qqq_below_20d_ma"] is False
 
 
 def test_fetch_benchmark_context_sets_above_ma_false_when_close_below_sma() -> None:
@@ -80,6 +81,7 @@ def test_fetch_benchmark_context_sets_above_ma_false_when_close_below_sma() -> N
     result = fetch_benchmark_context(_StubProvider(), ctx)
 
     assert result["qqq_above_20d_ma"] is False
+    assert result["qqq_below_20d_ma"] is True
 ```
 
 - [ ] **Step 2: 테스트 실패 확인**
@@ -104,10 +106,12 @@ def fetch_benchmark_context(market_data_provider: MarketDataProvider, context: P
     closes = [float(value) for value in history.sort_values("date")["close"].tolist()]
     sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
     qqq_above_20d_ma = (closes[-1] > sma_20) if (sma_20 is not None and closes) else None
+    qqq_below_20d_ma = (closes[-1] < sma_20) if (sma_20 is not None and closes) else None
     return {
         "qqq_return_20d": _percent_return(closes, 20),
         "qqq_return_60d": _percent_return(closes, 60),
         "qqq_above_20d_ma": qqq_above_20d_ma,
+        "qqq_below_20d_ma": qqq_below_20d_ma,
     }
 ```
 
@@ -123,7 +127,7 @@ uv run pytest tests/test_pipeline.py::test_fetch_benchmark_context_sets_above_ma
 
 ```bash
 git add src/screener/_pipeline/context.py tests/test_pipeline.py
-git commit -m "feat: add qqq_above_20d_ma flag to fetch_benchmark_context"
+git commit -m "feat: add qqq below 20d ma flag to fetch_benchmark_context"
 ```
 
 ---
@@ -146,7 +150,7 @@ from screener.alerts.policy import evaluate_regime_gate
 
 ```python
 def test_evaluate_regime_gate_returns_pass_when_above_ma() -> None:
-    decision = evaluate_regime_gate(qqq_above_20d_ma=True, qqq_return_20d=-8.0)
+    decision = evaluate_regime_gate(qqq_below_20d_ma=False, qqq_return_20d=-8.0)
 
     assert decision.status == "pass"
     assert decision.is_bearish is False
@@ -155,7 +159,7 @@ def test_evaluate_regime_gate_returns_pass_when_above_ma() -> None:
 
 
 def test_evaluate_regime_gate_returns_capped_when_below_ma_and_return_below_threshold() -> None:
-    decision = evaluate_regime_gate(qqq_above_20d_ma=False, qqq_return_20d=-6.0)
+    decision = evaluate_regime_gate(qqq_below_20d_ma=True, qqq_return_20d=-6.0)
 
     assert decision.status == "capped"
     assert decision.is_bearish is True
@@ -164,7 +168,7 @@ def test_evaluate_regime_gate_returns_capped_when_below_ma_and_return_below_thre
 
 
 def test_evaluate_regime_gate_returns_unknown_on_missing_data() -> None:
-    decision = evaluate_regime_gate(qqq_above_20d_ma=None, qqq_return_20d=None)
+    decision = evaluate_regime_gate(qqq_below_20d_ma=None, qqq_return_20d=None)
 
     assert decision.status == "unknown"
     assert decision.is_bearish is False
@@ -211,17 +215,17 @@ class RegimeDecision:
 
 def evaluate_regime_gate(
     *,
-    qqq_above_20d_ma: bool | None,
+    qqq_below_20d_ma: bool | None,
     qqq_return_20d: float | None,
 ) -> RegimeDecision:
-    if qqq_above_20d_ma is None or qqq_return_20d is None:
+    if qqq_below_20d_ma is None or qqq_return_20d is None:
         return RegimeDecision(
             status="unknown",
             is_bearish=False,
             watchlist_cap=None,
             reason="missing_benchmark_context",
         )
-    bearish = (not qqq_above_20d_ma) and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
+    bearish = qqq_below_20d_ma and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
     return RegimeDecision(
         status="capped" if bearish else "pass",
         is_bearish=bearish,
@@ -315,7 +319,7 @@ def test_build_daily_alert_caps_watchlist_in_bearish_regime() -> None:
         make_watchlist_candidate(ticker="W05"),
     ]
     result = make_result(candidates, bars_nonempty_count=95)
-    bearish_context = {"qqq_above_20d_ma": False, "qqq_return_20d": -7.0}
+    bearish_context = {"qqq_below_20d_ma": True, "qqq_return_20d": -7.0}
 
     document, next_state = build_daily_alert_document(
         result,
@@ -341,7 +345,7 @@ def test_build_daily_alert_caps_watchlist_in_bearish_regime() -> None:
 def test_build_daily_alert_does_not_cap_watchlist_in_normal_regime() -> None:
     candidates = [make_watchlist_candidate(ticker=f"T{i:02d}") for i in range(6)]
     result = make_result(candidates, bars_nonempty_count=95)
-    normal_context = {"qqq_above_20d_ma": True, "qqq_return_20d": 1.0}
+    normal_context = {"qqq_below_20d_ma": False, "qqq_return_20d": 1.0}
 
     document, next_state = build_daily_alert_document(
         result,
@@ -409,7 +413,7 @@ def build_daily_alert_document(
     quality_gate = evaluate_daily_quality_gate(result.metadata)
     _bc = benchmark_context or {}
     regime = evaluate_regime_gate(
-        qqq_above_20d_ma=_bc.get("qqq_above_20d_ma"),
+        qqq_below_20d_ma=_bc.get("qqq_below_20d_ma"),
         qqq_return_20d=_bc.get("qqq_return_20d"),
     )
     events: list[AlertEvent] = []

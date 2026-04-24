@@ -42,17 +42,17 @@ class RegimeDecision:
 
 def evaluate_regime_gate(
     *,
-    qqq_above_20d_ma: bool | None,
+    qqq_below_20d_ma: bool | None,
     qqq_return_20d: float | None,
 ) -> RegimeDecision:
-    if qqq_above_20d_ma is None or qqq_return_20d is None:
+    if qqq_below_20d_ma is None or qqq_return_20d is None:
         return RegimeDecision(
             status="unknown",
             is_bearish=False,
             watchlist_cap=None,
             reason="missing_benchmark_context",
         )
-    bearish = (not qqq_above_20d_ma) and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
+    bearish = qqq_below_20d_ma and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
     return RegimeDecision(
         status="capped" if bearish else "pass",
         is_bearish=bearish,

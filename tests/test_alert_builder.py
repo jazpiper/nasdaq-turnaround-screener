@@ -187,7 +187,7 @@ def test_build_daily_alert_caps_watchlist_in_bearish_regime() -> None:
         make_watchlist_candidate(ticker="W05"),
     ]
     result = make_result(candidates, bars_nonempty_count=95)
-    bearish_context = {"qqq_above_20d_ma": False, "qqq_return_20d": -7.0}
+    bearish_context = {"qqq_below_20d_ma": True, "qqq_return_20d": -7.0}
 
     document, next_state = build_daily_alert_document(
         result,
@@ -218,7 +218,7 @@ def test_build_daily_alert_caps_watchlist_in_bearish_regime() -> None:
 def test_build_daily_alert_does_not_cap_watchlist_in_normal_regime() -> None:
     candidates = [make_watchlist_candidate(ticker=f"T{i:02d}") for i in range(6)]
     result = make_result(candidates, bars_nonempty_count=95)
-    normal_context = {"qqq_above_20d_ma": True, "qqq_return_20d": 1.0}
+    normal_context = {"qqq_below_20d_ma": False, "qqq_return_20d": 1.0}
 
     document, next_state = build_daily_alert_document(
         result,
@@ -227,6 +227,29 @@ def test_build_daily_alert_does_not_cap_watchlist_in_normal_regime() -> None:
         report_path="output/daily/2026-04-22/daily-report.json",
         metadata_path="output/daily/2026-04-22/run-metadata.json",
         benchmark_context=normal_context,
+    )
+
+    assert document.summary.regime_gate == "pass"
+    assert document.summary.regime_watchlist_cap is None
+    assert document.summary.suppressed_candidate_count == 0
+    digest_events = [e for e in document.events if e.event_type == "digest_alert"]
+    assert len(digest_events) == 1
+    assert digest_events[0].payload["member_count"] == 6
+    assert set(next_state.tickers) == {f"T{i:02d}" for i in range(6)}
+
+
+def test_build_daily_alert_does_not_cap_when_close_equals_ma() -> None:
+    candidates = [make_watchlist_candidate(ticker=f"T{i:02d}") for i in range(6)]
+    result = make_result(candidates, bars_nonempty_count=95)
+    equal_ma_context = {"qqq_below_20d_ma": False, "qqq_return_20d": -7.0}
+
+    document, next_state = build_daily_alert_document(
+        result,
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context=equal_ma_context,
     )
 
     assert document.summary.regime_gate == "pass"

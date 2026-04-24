@@ -31,7 +31,7 @@ def build_daily_alert_document(
     quality_gate = evaluate_daily_quality_gate(result.metadata)
     _bc = benchmark_context or {}
     regime = evaluate_regime_gate(
-        qqq_above_20d_ma=_bc.get("qqq_above_20d_ma"),
+        qqq_below_20d_ma=_bc.get("qqq_below_20d_ma"),
         qqq_return_20d=_bc.get("qqq_return_20d"),
     )
     events: list[AlertEvent] = []

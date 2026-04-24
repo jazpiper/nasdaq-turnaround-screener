@@ -42,7 +42,7 @@ buy-review 후보는 cap 대상 외다.
 
 | 파일 | 변경 내용 |
 |------|----------|
-| `src/screener/_pipeline/context.py` | `fetch_benchmark_context`에 `qqq_above_20d_ma: bool` 계산 추가 |
+| `src/screener/_pipeline/context.py` | `fetch_benchmark_context`에 `qqq_below_20d_ma: bool` 계산 추가 |
 | `src/screener/alerts/policy.py` | `RegimeDecision` 데이터클래스 + `evaluate_regime_gate()` 함수 신설 |
 | `src/screener/alerts/schema.py` | `AlertSummary`에 `regime_gate`, `regime_watchlist_cap`, `regime_gate_reason` 필드 추가 |
 | `src/screener/alerts/builder.py` | `benchmark_context` 파라미터 수용, stable-order regime cap 적용, capped-out watchlist를 state/suppressed count에 반영 |
@@ -55,9 +55,9 @@ buy-review 후보는 cap 대상 외다.
 ```
 fetch_benchmark_context()
   └─ 기존: qqq_return_20d, qqq_return_60d
-  └─ 추가: qqq_above_20d_ma (bool)
+  └─ 추가: qqq_below_20d_ma (bool)
 
-evaluate_regime_gate(qqq_above_20d_ma, qqq_return_20d)
+evaluate_regime_gate(qqq_below_20d_ma, qqq_return_20d)
   → RegimeDecision(status, is_bearish, watchlist_cap, reason)
 
 build_daily_alert_document(... benchmark_context)
@@ -75,10 +75,11 @@ build_daily_alert_document(... benchmark_context)
 
 ```python
 sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
-qqq_above_20d_ma = (closes[-1] > sma_20) if sma_20 is not None else None
+qqq_below_20d_ma = (closes[-1] < sma_20) if sma_20 is not None else None
 ```
 
 `technicals.py`의 `rolling_mean` 유틸 재사용 가능.
+종가가 SMA와 같으면 아래가 아니므로 `False`다.
 
 ### `policy.py` — RegimeDecision
 
@@ -95,17 +96,17 @@ class RegimeDecision:
 
 def evaluate_regime_gate(
     *,
-    qqq_above_20d_ma: bool | None,
+    qqq_below_20d_ma: bool | None,
     qqq_return_20d: float | None,
 ) -> RegimeDecision:
-    if qqq_above_20d_ma is None or qqq_return_20d is None:
+    if qqq_below_20d_ma is None or qqq_return_20d is None:
         return RegimeDecision(
             status="unknown",
             is_bearish=False,
             watchlist_cap=None,
             reason="missing_benchmark_context",
         )
-    bearish = (not qqq_above_20d_ma) and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
+    bearish = qqq_below_20d_ma and (qqq_return_20d < REGIME_QQQ_RETURN_THRESHOLD)
     return RegimeDecision(
         status="capped" if bearish else "pass",
         is_bearish=bearish,
@@ -118,7 +119,7 @@ def evaluate_regime_gate(
 
 ```python
 regime = evaluate_regime_gate(
-    qqq_above_20d_ma=benchmark_context.get("qqq_above_20d_ma"),
+    qqq_below_20d_ma=benchmark_context.get("qqq_below_20d_ma"),
     qqq_return_20d=benchmark_context.get("qqq_return_20d"),
 )
 capped_watchlist_tickers: set[str] = set()
@@ -175,7 +176,8 @@ class AlertSummary(BaseModel):
 | `test_regime_gate_missing_data` | None 입력 → cap 없음, `status="unknown"` |
 | `test_build_alert_caps_watchlist` | bearish 시 watchlist 3개 초과분 digest/state 제외, suppressed count 반영, buy-review 유지, 기존 digest 순서 유지 |
 | `test_build_alert_no_cap_in_normal_regime` | 정상 regime 시 watchlist 수 변화 없음 |
-| `test_qqq_above_20d_ma_flag` | `fetch_benchmark_context`가 `qqq_above_20d_ma` 올바르게 반환 |
+| `test_qqq_below_20d_ma_flag` | `fetch_benchmark_context`가 `qqq_below_20d_ma` 올바르게 반환 |
+| `test_regime_gate_equal_ma_pass` | QQQ 종가가 20일 MA와 같으면 return < -5%여도 cap 없음 |
 | `test_pipeline_passes_benchmark_context_to_alert_builder` | daily final pipeline에서 bearish context가 summary와 digest cap에 반영 |
 
 ---

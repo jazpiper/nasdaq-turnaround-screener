@@ -547,6 +547,7 @@ def test_fetch_benchmark_context_sets_above_ma_true_when_close_above_sma() -> No
     result = fetch_benchmark_context(_StubProvider(), ctx)
 
     assert result["qqq_above_20d_ma"] is True
+    assert result["qqq_below_20d_ma"] is False
 
 
 def test_fetch_benchmark_context_sets_above_ma_false_when_close_below_sma() -> None:
@@ -576,3 +577,34 @@ def test_fetch_benchmark_context_sets_above_ma_false_when_close_below_sma() -> N
     result = fetch_benchmark_context(_StubProvider(), ctx)
 
     assert result["qqq_above_20d_ma"] is False
+    assert result["qqq_below_20d_ma"] is True
+
+
+def test_fetch_benchmark_context_marks_equal_sma_as_not_below() -> None:
+    from screener._pipeline.context import fetch_benchmark_context
+    from screener.models import PipelineContext
+
+    closes = [100.0] * 25
+    rows = [
+        {
+            "date": date(2026, 1, 1) + timedelta(days=i),
+            "open": c,
+            "high": c,
+            "low": c,
+            "close": c,
+            "adj_close": c,
+            "volume": 1e6,
+        }
+        for i, c in enumerate(closes)
+    ]
+    df = pd.DataFrame(rows)
+
+    class _StubProvider:
+        def fetch_history(self, ticker, context):
+            return df
+
+    ctx = PipelineContext(run_date=date(2026, 1, 26), generated_at=datetime(2026, 1, 26, 20, 0))
+    result = fetch_benchmark_context(_StubProvider(), ctx)
+
+    assert result["qqq_above_20d_ma"] is False
+    assert result["qqq_below_20d_ma"] is False

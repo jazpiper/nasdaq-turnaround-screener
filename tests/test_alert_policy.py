@@ -240,7 +240,7 @@ def test_evaluate_intraday_quality_gate_warns_on_partial_collection() -> None:
 
 
 def test_evaluate_regime_gate_returns_pass_when_above_ma() -> None:
-    decision = evaluate_regime_gate(qqq_above_20d_ma=True, qqq_return_20d=-8.0)
+    decision = evaluate_regime_gate(qqq_below_20d_ma=False, qqq_return_20d=-8.0)
 
     assert decision.status == "pass"
     assert decision.is_bearish is False
@@ -249,7 +249,7 @@ def test_evaluate_regime_gate_returns_pass_when_above_ma() -> None:
 
 
 def test_evaluate_regime_gate_returns_capped_when_below_ma_and_return_below_threshold() -> None:
-    decision = evaluate_regime_gate(qqq_above_20d_ma=False, qqq_return_20d=-6.0)
+    decision = evaluate_regime_gate(qqq_below_20d_ma=True, qqq_return_20d=-6.0)
 
     assert decision.status == "capped"
     assert decision.is_bearish is True
@@ -258,9 +258,18 @@ def test_evaluate_regime_gate_returns_capped_when_below_ma_and_return_below_thre
 
 
 def test_evaluate_regime_gate_returns_unknown_on_missing_data() -> None:
-    decision = evaluate_regime_gate(qqq_above_20d_ma=None, qqq_return_20d=None)
+    decision = evaluate_regime_gate(qqq_below_20d_ma=None, qqq_return_20d=None)
 
     assert decision.status == "unknown"
     assert decision.is_bearish is False
     assert decision.watchlist_cap is None
     assert decision.reason == "missing_benchmark_context"
+
+
+def test_evaluate_regime_gate_does_not_cap_when_close_equals_ma() -> None:
+    decision = evaluate_regime_gate(qqq_below_20d_ma=False, qqq_return_20d=-6.0)
+
+    assert decision.status == "pass"
+    assert decision.is_bearish is False
+    assert decision.watchlist_cap is None
+    assert decision.reason == "conditions_not_met"
