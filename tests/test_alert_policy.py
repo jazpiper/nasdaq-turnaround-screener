@@ -8,6 +8,7 @@ from screener.alerts.policy import (
     determine_change_status,
     evaluate_daily_quality_gate,
     evaluate_intraday_quality_gate,
+    evaluate_regime_gate,
     material_signature,
 )
 from screener.alerts.state import TickerAlertState
@@ -236,3 +237,30 @@ def test_evaluate_intraday_quality_gate_warns_on_partial_collection() -> None:
         failed_count=2,
         skipped_due_to_credit_exhaustion_count=0,
     ) == "warn"
+
+
+def test_evaluate_regime_gate_returns_pass_when_above_ma() -> None:
+    decision = evaluate_regime_gate(qqq_above_20d_ma=True, qqq_return_20d=-8.0)
+
+    assert decision.status == "pass"
+    assert decision.is_bearish is False
+    assert decision.watchlist_cap is None
+    assert decision.reason == "conditions_not_met"
+
+
+def test_evaluate_regime_gate_returns_capped_when_below_ma_and_return_below_threshold() -> None:
+    decision = evaluate_regime_gate(qqq_above_20d_ma=False, qqq_return_20d=-6.0)
+
+    assert decision.status == "capped"
+    assert decision.is_bearish is True
+    assert decision.watchlist_cap == 3
+    assert decision.reason == "bearish_qqq_regime"
+
+
+def test_evaluate_regime_gate_returns_unknown_on_missing_data() -> None:
+    decision = evaluate_regime_gate(qqq_above_20d_ma=None, qqq_return_20d=None)
+
+    assert decision.status == "unknown"
+    assert decision.is_bearish is False
+    assert decision.watchlist_cap is None
+    assert decision.reason == "missing_benchmark_context"
