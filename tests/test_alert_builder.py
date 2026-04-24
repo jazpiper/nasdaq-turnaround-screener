@@ -29,6 +29,14 @@ def make_candidate(*, ticker: str = "AAPL", score: int = 64) -> CandidateResult:
     )
 
 
+def make_watchlist_candidate(*, ticker: str, score: int = 52) -> CandidateResult:
+    from screener.scoring import WATCHLIST_TIER
+
+    return make_candidate(ticker=ticker, score=score).model_copy(
+        update={"tier": WATCHLIST_TIER, "tier_reasons": ["score below buy-review threshold"]}
+    )
+
+
 def make_result(
     candidates: list[CandidateResult],
     *,
@@ -70,7 +78,7 @@ def test_build_daily_alert_document_marks_single_events_warning_and_includes_sou
     assert next_state.tickers["AAPL"].last_delivery_tier == "single"
 
 
-def test_build_daily_alert_document_defaults_regime_gate_to_unknown() -> None:
+def test_build_daily_alert_document_marks_regime_unknown_when_benchmark_context_missing() -> None:
     document, _ = build_daily_alert_document(
         make_result([make_candidate()], bars_nonempty_count=95),
         state=AlertState(),
@@ -81,7 +89,7 @@ def test_build_daily_alert_document_defaults_regime_gate_to_unknown() -> None:
 
     assert document.summary.regime_gate == "unknown"
     assert document.summary.regime_watchlist_cap is None
-    assert document.summary.regime_gate_reason is None
+    assert document.summary.regime_gate_reason == "missing_benchmark_context"
 
 
 def test_build_daily_alert_document_keeps_prior_state_when_quality_gate_blocks() -> None:
@@ -165,3 +173,66 @@ def test_build_daily_alert_document_routes_unchanged_final_single_to_digest_only
     )
 
     assert [event.event_type for event in document.events] == ["digest_alert"]
+
+
+def test_build_daily_alert_caps_watchlist_in_bearish_regime() -> None:
+    buy_review_digest = make_candidate(ticker="BR0", score=55)
+    candidates = [
+        make_watchlist_candidate(ticker="W00"),
+        make_watchlist_candidate(ticker="W01"),
+        buy_review_digest,
+        make_watchlist_candidate(ticker="W02"),
+        make_watchlist_candidate(ticker="W03"),
+        make_watchlist_candidate(ticker="W04"),
+        make_watchlist_candidate(ticker="W05"),
+    ]
+    result = make_result(candidates, bars_nonempty_count=95)
+    bearish_context = {"qqq_above_20d_ma": False, "qqq_return_20d": -7.0}
+
+    document, next_state = build_daily_alert_document(
+        result,
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context=bearish_context,
+    )
+
+    assert document.summary.regime_gate == "capped"
+    assert document.summary.regime_watchlist_cap == 3
+    assert document.summary.regime_gate_reason == "bearish_qqq_regime"
+    assert document.summary.eligible_candidate_count == 4
+    assert document.summary.suppressed_candidate_count == 3
+    digest_events = [e for e in document.events if e.event_type == "digest_alert"]
+    assert len(digest_events) == 1
+    assert digest_events[0].payload["member_count"] == 4
+    assert [member["ticker"] for member in digest_events[0].payload["members"]] == [
+        "W00",
+        "W01",
+        "BR0",
+        "W02",
+    ]
+    assert set(next_state.tickers) == {"W00", "W01", "BR0", "W02"}
+
+
+def test_build_daily_alert_does_not_cap_watchlist_in_normal_regime() -> None:
+    candidates = [make_watchlist_candidate(ticker=f"T{i:02d}") for i in range(6)]
+    result = make_result(candidates, bars_nonempty_count=95)
+    normal_context = {"qqq_above_20d_ma": True, "qqq_return_20d": 1.0}
+
+    document, next_state = build_daily_alert_document(
+        result,
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context=normal_context,
+    )
+
+    assert document.summary.regime_gate == "pass"
+    assert document.summary.regime_watchlist_cap is None
+    assert document.summary.suppressed_candidate_count == 0
+    digest_events = [e for e in document.events if e.event_type == "digest_alert"]
+    assert len(digest_events) == 1
+    assert digest_events[0].payload["member_count"] == 6
+    assert set(next_state.tickers) == {f"T{i:02d}" for i in range(6)}
