@@ -418,3 +418,61 @@ def test_percent_return_handles_zero_or_missing_history() -> None:
     assert _percent_return([100.0, 110.0], 5) is None
     assert _percent_return([0.0, 1.0, 2.0], 2) is None
     assert _percent_return([100.0, 105.0, 110.0], 2) == pytest.approx(10.0)
+
+
+def test_fetch_benchmark_context_sets_above_ma_true_when_close_above_sma() -> None:
+    from screener._pipeline.context import fetch_benchmark_context
+    from screener.models import PipelineContext
+
+    closes = [100.0] * 15 + [110.0] * 10
+    rows = [
+        {
+            "date": date(2026, 1, 1) + timedelta(days=i),
+            "open": c,
+            "high": c,
+            "low": c,
+            "close": c,
+            "adj_close": c,
+            "volume": 1e6,
+        }
+        for i, c in enumerate(closes)
+    ]
+    df = pd.DataFrame(rows)
+
+    class _StubProvider:
+        def fetch_history(self, ticker, context):
+            return df
+
+    ctx = PipelineContext(run_date=date(2026, 1, 26), generated_at=datetime(2026, 1, 26, 20, 0))
+    result = fetch_benchmark_context(_StubProvider(), ctx)
+
+    assert result["qqq_above_20d_ma"] is True
+
+
+def test_fetch_benchmark_context_sets_above_ma_false_when_close_below_sma() -> None:
+    from screener._pipeline.context import fetch_benchmark_context
+    from screener.models import PipelineContext
+
+    closes = [110.0] * 15 + [100.0] * 10
+    rows = [
+        {
+            "date": date(2026, 1, 1) + timedelta(days=i),
+            "open": c,
+            "high": c,
+            "low": c,
+            "close": c,
+            "adj_close": c,
+            "volume": 1e6,
+        }
+        for i, c in enumerate(closes)
+    ]
+    df = pd.DataFrame(rows)
+
+    class _StubProvider:
+        def fetch_history(self, ticker, context):
+            return df
+
+    ctx = PipelineContext(run_date=date(2026, 1, 26), generated_at=datetime(2026, 1, 26, 20, 0))
+    result = fetch_benchmark_context(_StubProvider(), ctx)
+
+    assert result["qqq_above_20d_ma"] is False

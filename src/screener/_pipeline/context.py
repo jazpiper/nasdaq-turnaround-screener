@@ -58,9 +58,12 @@ def fetch_benchmark_context(market_data_provider: MarketDataProvider, context: P
         prepare([benchmark], context)
     history = market_data_provider.fetch_history(benchmark, context)
     closes = [float(value) for value in history.sort_values("date")["close"].tolist()]
+    sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else None
+    qqq_above_20d_ma = (closes[-1] > sma_20) if sma_20 is not None and closes else None
     return {
         "qqq_return_20d": _percent_return(closes, 20),
         "qqq_return_60d": _percent_return(closes, 60),
+        "qqq_above_20d_ma": qqq_above_20d_ma,
     }
 
 
@@ -105,4 +108,3 @@ __all__ = [
     "merge_earnings_context",
     "normalize_generated_at",
 ]
-
