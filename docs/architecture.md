@@ -46,22 +46,39 @@ CLI / runner
 - `collection-metadata.json` 의 `failures`, `skipped_due_to_credit_exhaustion` 같은 필드는 운영 해석과 Oracle 적재에는 쓰이지만, 현재 이 저장소 안의 daily merge 경로가 직접 소비하지는 않습니다.
 - Oracle `intraday_collection_runs` / `intraday_collection_quotes` 는 현재 이 저장소 안에서는 write-only persistence 경로입니다.
 
-## 4. Backtest Skeleton
+## 4. Backtest & Tuning Loop
+
+### Backtest
 ```text
-CLI
+CLI backtest
   -> historical daily history load
   -> trading-date replay
   -> same scoring rules 재적용
-  -> forward N-day return observation 저장
+  -> forward N-day return observation 저장 (subscores + snapshot 포함)
 ```
 
-현재 backtest는 calibration 준비용 skeleton이며, 별도 전략 엔진이나 portfolio simulation은 아직 없습니다.
+### Parameter Tuning (Walk-Forward)
+```text
+CLI tune
+  -> HistoricalBacktestRunner.generate_observations() 호출
+  -> 충분한 데이터 있으면: 슬라이딩 창 walk-forward
+       train 창: grid 400조합 평가 (TierThresholds 재분류만, 지표 재계산 없음)
+       eval 창: 최적 조합 out-of-sample 검증
+       안정성: min_wins 창 이상 우승한 조합만 proposal
+  -> 데이터 부족 시: single-window 그리드서치 fallback
+  -> output/tuning/<end-date>/ 에 proposal JSON + diff MD + walkforward JSON 저장
+  -> 사람이 proposal 승인 후 scripts/apply_tuning_proposal.py --write 로 tiering.py 반영
+  -> uv run pytest 자동 실행, 실패 시 tiering.py 원복
+```
+
+사람 승인 없이 자동 적용되지 않습니다. `apply_tuning_proposal.py` 기본 모드는 dry-run입니다.
 
 ## 5. Main Modules
-- `src/screener/cli/main.py`: `run`, `collect-window`, `init-oracle-schema`, `backtest`
+- `src/screener/cli/main.py`: `run`, `collect-window`, `init-oracle-schema`, `backtest`, `tune`
 - `src/screener/pipeline.py`: 공개 facade
 - `src/screener/_pipeline/`: provider, context merge, snapshot, orchestration (`contracts.py` 에 ABC 정의)
-- `src/screener/backtest.py`: historical replay와 forward-return artifact 생성
+- `src/screener/backtest.py`: historical replay와 forward-return artifact 생성. `generate_observations()` 로 관찰치 생성과 집계를 분리
+- `src/screener/tuning/`: walk-forward 그리드서치 패키지 (`grid`, `objective`, `runner`, `walkforward`, `report`)
 - `src/screener/collector.py`: intraday 계획 생성, 분당 throttle, daily-credit exhaustion short-circuit, artifact write
 - `src/screener/intraday_ops.py`: slot id normalization과 cron/OpenClaw용 collector command template 조립
 - `src/screener/intraday_artifacts.py`: daily merge 경로에서 staged intraday artifact를 읽는 reader
