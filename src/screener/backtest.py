@@ -87,22 +87,26 @@ class HistoricalBacktestRunner:
         self.earnings_calendar_provider = earnings_calendar_provider or build_earnings_calendar_provider(settings)
         self.benchmark_market_data_provider = benchmark_market_data_provider or build_market_data_provider(settings)
 
-    def run(
+    def generate_observations(
         self,
         *,
         start_date: date,
         end_date: date,
-        output_dir: Path,
         forward_horizons: tuple[int, ...] = DEFAULT_FORWARD_HORIZONS,
-        dry_run: bool = False,
-    ) -> tuple[dict[str, Any], BacktestArtifacts]:
+    ) -> tuple[list[BacktestObservation], list[str], int]:
+        """Score all universe tickers for each trading day and return observations.
+
+        Returns (observations, data_failures, trading_day_count).
+        Separated from run() so the tuning loop can reuse observations without
+        writing backtest artifacts.
+        """
         if end_date < start_date:
             raise ValueError("end_date must be on or after start_date")
 
         base_context = build_context(
             run_date=end_date,
             dry_run=True,
-            output_dir=output_dir,
+            output_dir=Path("output"),
             run_mode="backtest",
             universe_name=self.settings.universe_name,
         )
@@ -122,7 +126,7 @@ class HistoricalBacktestRunner:
                 run_date=run_date,
                 generated_at=base_context.generated_at,
                 dry_run=True,
-                output_dir=output_dir,
+                output_dir=Path("output"),
                 run_mode="backtest",
                 universe_name=base_context.universe_name,
             )
@@ -169,10 +173,26 @@ class HistoricalBacktestRunner:
                 )
 
         observations.sort(key=lambda item: (item.run_date, -item.score, item.ticker))
+        return observations, data_failures, len(trading_dates)
+
+    def run(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        output_dir: Path,
+        forward_horizons: tuple[int, ...] = DEFAULT_FORWARD_HORIZONS,
+        dry_run: bool = False,
+    ) -> tuple[dict[str, Any], BacktestArtifacts]:
+        observations, data_failures, trading_day_count = self.generate_observations(
+            start_date=start_date,
+            end_date=end_date,
+            forward_horizons=forward_horizons,
+        )
         summary = {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
-            "trading_day_count": len(trading_dates),
+            "trading_day_count": trading_day_count,
             "candidate_observation_count": len(observations),
             "forward_horizons": list(forward_horizons),
             "forward_return_summary": _summarize_forward_returns(observations, forward_horizons),

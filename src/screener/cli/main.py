@@ -12,6 +12,9 @@ from screener.config import Settings, get_settings
 from screener.models import ScreenRunResult
 from screener.pipeline import ScreenPipeline, build_context
 from screener.storage import OracleSqlStorage, OracleSqlStorageError
+from screener.storage.files import ensure_directory
+from screener.tuning import TierThresholdsGrid, tune_single_window
+from screener.tuning.report import write_diff_markdown, write_grid_csv, write_proposal_json
 
 app = typer.Typer(help="NASDAQ turnaround screener CLI.")
 
@@ -196,6 +199,65 @@ def backtest(
 
     typer.echo(f"Summary report: {artifacts.summary_path}")
     typer.echo(f"Observation CSV: {artifacts.observations_path}")
+
+
+@app.command()
+def tune(
+    start_date: str = typer.Option(..., "--start-date", help="Inclusive start date in YYYY-MM-DD format."),
+    end_date: str = typer.Option(..., "--end-date", help="Inclusive end date in YYYY-MM-DD format."),
+    output_dir: Path = typer.Option(Path("output/tuning"), help="Root directory for tuning artifacts."),
+    forward_horizon: int = typer.Option(10, min=1, help="Forward return horizon in trading days for the objective function."),
+    min_samples: int = typer.Option(5, min=1, help="Minimum buy-review samples required for a valid objective score."),
+    horizons: str = typer.Option("5,10,20", help="Comma-separated forward return horizons to collect during backtest."),
+) -> None:
+    """Grid-search tier thresholds using historical backtest observations.
+
+    Collects observations via HistoricalBacktestRunner, evaluates all 400
+    threshold combinations, and writes a proposal JSON + diff markdown to
+    output_dir/<end-date>/.
+    """
+    settings = get_settings(output_dir=output_dir)
+    parsed_start = parse_run_date(start_date)
+    parsed_end = parse_run_date(end_date)
+    parsed_horizons = parse_horizons(horizons)
+
+    typer.echo(f"Collecting backtest observations ({start_date} → {end_date})…")
+    runner = HistoricalBacktestRunner(settings=settings)
+    observations, data_failures, trading_day_count = runner.generate_observations(
+        start_date=parsed_start,
+        end_date=parsed_end,
+        forward_horizons=parsed_horizons,
+    )
+
+    typer.echo(f"Trading days: {trading_day_count}  |  Observations: {len(observations)}")
+    if data_failures:
+        typer.echo(f"Data failures: {len(data_failures)}", err=True)
+    if not observations:
+        typer.echo("No observations — cannot run tuning.", err=True)
+        raise typer.Exit(code=1)
+
+    grid = TierThresholdsGrid()
+    typer.echo(f"Running grid search ({len(grid)} combinations, horizon=T+{forward_horizon}, min_samples={min_samples})…")
+    result = tune_single_window(observations, horizon=forward_horizon, grid=grid, min_samples=min_samples)
+
+    artifact_dir = ensure_directory(output_dir / parsed_end.isoformat())
+    grid_path = write_grid_csv(artifact_dir / "tuning-grid.csv", result)
+    proposal_path = write_proposal_json(artifact_dir / "tuning-proposal.json", result)
+    diff_path = write_diff_markdown(artifact_dir / "tuning-diff.md", result)
+
+    typer.echo(f"Grid CSV:      {grid_path}")
+    typer.echo(f"Proposal JSON: {proposal_path}")
+    typer.echo(f"Diff markdown: {diff_path}")
+
+    best = result.best
+    if best is None:
+        typer.echo("Result: no valid proposal (no combination met the min_samples threshold).")
+    else:
+        typer.echo(
+            f"Best: min_score={best.thresholds.min_score}  min_reversal={best.thresholds.min_reversal}"
+            f"  min_volume_ratio={best.thresholds.min_volume_ratio}  max_risk_count={best.thresholds.max_risk_count}"
+        )
+        typer.echo(f"  excess_return={best.excess_return:+.4f}%  sample_count={best.sample_count}")
 
 
 def _persist_daily_run_if_enabled(settings: Settings, result: ScreenRunResult) -> str | None:
