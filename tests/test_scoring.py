@@ -56,6 +56,36 @@ class ScoringTests(unittest.TestCase):
         self.assertGreater(ranked[0].score, ranked[1].score)
         self.assertIn("BB 하단 근처 또는 재진입 구간", ranked[0].reasons)
 
+    def test_rank_candidates_orders_by_risk_adjusted_score_before_raw_score(self):
+        rows = [
+            make_snapshot(
+                "RISKY",
+                close=97.0,
+                bb_lower=97.5,
+                rsi_14=27.0,
+                volume_ratio_20d=1.1,
+                close_improvement_streak=3,
+                rel_strength_20d_vs_qqq=-8.0,
+                rel_strength_60d_vs_qqq=-12.0,
+            ),
+            make_snapshot(
+                "CLEAN",
+                close=98.5,
+                bb_lower=97.0,
+                rsi_14=34.0,
+                volume_ratio_20d=1.1,
+                close_improvement_streak=2,
+                rel_strength_20d_vs_qqq=2.5,
+                rel_strength_60d_vs_qqq=1.0,
+            ),
+        ]
+
+        ranked = rank_candidates(rows)
+
+        self.assertEqual([candidate.ticker for candidate in ranked], ["CLEAN", "RISKY"])
+        self.assertEqual(ranked[0].score, ranked[1].score)
+        self.assertGreater(ranked[0].risk_adjusted_score, ranked[1].risk_adjusted_score)
+
     def test_rank_candidates_attaches_risks(self):
         candidate = rank_candidates([
             make_snapshot("RISKY", sma_5=101.0, close=98.0, volume_ratio_20d=0.6, market_context_score=4.0)
@@ -73,6 +103,20 @@ class ScoringTests(unittest.TestCase):
         candidate = score_candidate(make_snapshot("SEVERE", weekly_trend_severe_damage=True))
         self.assertEqual(candidate.snapshot["severe_weekly_penalty"], 10)
         self.assertTrue(any("심하게 훼손" in risk for risk in candidate.risks))
+
+    def test_score_candidate_tracks_risk_adjusted_score_penalty(self):
+        candidate = score_candidate(
+            make_snapshot(
+                "LAGGING",
+                volume_ratio_20d=0.6,
+                rel_strength_20d_vs_qqq=-8.0,
+                rel_strength_60d_vs_qqq=-12.0,
+            )
+        )
+
+        self.assertLess(candidate.risk_adjusted_score, candidate.score)
+        self.assertGreaterEqual(candidate.snapshot["risk_adjustment_penalty"], 9)
+        self.assertEqual(candidate.risk_adjusted_score, candidate.score - candidate.snapshot["risk_adjustment_penalty"])
 
     def test_rank_candidates_excludes_zero_score_candidates(self):
         ranked = rank_candidates([

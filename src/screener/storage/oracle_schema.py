@@ -34,6 +34,7 @@ SCHEMA_STATEMENTS = (
           run_id VARCHAR2(64) NOT NULL,
           ticker VARCHAR2(32) NOT NULL,
           score NUMBER NOT NULL,
+          risk_adjusted_score NUMBER,
           close_price NUMBER,
           lower_bb NUMBER,
           rsi14 NUMBER,
@@ -50,6 +51,17 @@ SCHEMA_STATEMENTS = (
     EXCEPTION
       WHEN OTHERS THEN
         IF SQLCODE != -955 THEN RAISE; END IF;
+    END;
+    """,
+    """
+    BEGIN
+      EXECUTE IMMEDIATE '
+        ALTER TABLE screen_candidates ADD (
+          risk_adjusted_score NUMBER
+        )';
+    EXCEPTION
+      WHEN OTHERS THEN
+        IF SQLCODE != -1430 THEN RAISE; END IF;
     END;
     """,
     """

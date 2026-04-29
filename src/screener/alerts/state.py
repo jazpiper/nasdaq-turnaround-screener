@@ -16,6 +16,7 @@ class TickerAlertState(BaseModel):
     last_emitted_at: datetime | None = None
     last_dedupe_key: str | None = None
     last_score: int | None = None
+    last_risk_adjusted_score: int | None = None
     last_rank: int | None = None
     last_headline_reason: str | None = None
     last_headline_risk: str | None = None

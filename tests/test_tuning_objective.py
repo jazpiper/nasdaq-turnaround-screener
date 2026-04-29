@@ -47,6 +47,25 @@ def test_reclassify_tier_demotes_with_strict_score_threshold() -> None:
     assert reclassify_tier(obs, TierThresholds(min_score=70)) == "watchlist"
 
 
+def test_reclassify_tier_uses_risk_adjusted_score_when_available() -> None:
+    obs = _make_obs(score=65)
+    obs = BacktestObservation(
+        run_date=obs.run_date,
+        ticker=obs.ticker,
+        score=obs.score,
+        risk_adjusted_score=58,
+        tier=obs.tier,
+        reasons=obs.reasons,
+        risks=obs.risks,
+        forward_returns=obs.forward_returns,
+        benchmark_forward_returns=obs.benchmark_forward_returns,
+        subscores=obs.subscores,
+        snapshot=obs.snapshot,
+    )
+
+    assert reclassify_tier(obs, TierThresholds()) == "watchlist"
+
+
 def test_reclassify_tier_promotes_with_lenient_thresholds() -> None:
     obs = _make_obs(
         score=55,

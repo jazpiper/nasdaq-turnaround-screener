@@ -130,6 +130,7 @@ uv run python -m screener.cli.main init-oracle-schema
 
 - persistence write path는 더 이상 runtime DDL을 수행하지 않습니다.
 - Oracle 저장을 쓰기 전에 `uv run python -m screener.cli.main init-oracle-schema` 를 1회 실행해 schema를 준비해야 합니다.
+- `risk_adjusted_score` 같은 새 저장 컬럼이 추가된 배포 후에는 기존 DB에도 같은 명령을 다시 1회 실행해 additive migration을 적용해야 합니다.
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
 ## 8. OpenClaw Usage
@@ -137,6 +138,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - 장중 수집은 `uv run python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
 - 장 마감 후 daily run은 `uv run python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
 - Oracle을 쓰는 환경이면 bootstrap 단계에서 `uv run python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
+- 이번 알고리즘/DB schema 변경처럼 새 Oracle 컬럼이 추가된 배포 뒤에는 OpenClaw producer cron을 재개하기 전에 `init-oracle-schema` 를 한 번 더 실행해야 합니다.
 - OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/alert-events.json` 입니다.
 - daily report JSON/Markdown에는 candidate별 ticker와 company name이 함께 포함됩니다.
 - intraday raw artifact는 daily run 보강용이지만, OpenClaw는 provisional consumer entrypoint `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽을 수 있습니다.

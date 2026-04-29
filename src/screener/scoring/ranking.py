@@ -11,6 +11,7 @@ from . import thresholds
 class ScreenCandidate:
     ticker: str
     score: int
+    risk_adjusted_score: int
     subscores: dict[str, int]
     reasons: list[str]
     risks: list[str]
@@ -273,6 +274,25 @@ def _apply_volatility_penalty(snapshot: dict[str, Any], reasons: list[str], risk
     return penalty
 
 
+def _risk_adjustment_penalty(snapshot: dict[str, Any], risks: list[str]) -> int:
+    penalty = 0
+    volume_ratio = _as_float(snapshot, "volume_ratio_20d")
+    if volume_ratio is not None and volume_ratio < thresholds.VOLUME_BASELINE_RATIO:
+        penalty += thresholds.RISK_ADJUSTMENT_WEAK_VOLUME_PENALTY
+
+    rel_strength_20d = _as_float(snapshot, "rel_strength_20d_vs_qqq")
+    if rel_strength_20d is not None and rel_strength_20d <= thresholds.RELATIVE_STRENGTH_20D_WEAK:
+        penalty += thresholds.RISK_ADJUSTMENT_WEAK_REL_STRENGTH_20D_PENALTY
+
+    rel_strength_60d = _as_float(snapshot, "rel_strength_60d_vs_qqq")
+    if rel_strength_60d is not None and rel_strength_60d <= thresholds.RELATIVE_STRENGTH_60D_WEAK:
+        penalty += thresholds.RISK_ADJUSTMENT_WEAK_REL_STRENGTH_60D_PENALTY
+
+    extra_risk_flags = max(len(risks) - thresholds.RISK_ADJUSTMENT_FREE_RISK_FLAGS, 0)
+    penalty += extra_risk_flags * thresholds.RISK_ADJUSTMENT_PER_EXTRA_RISK_FLAG
+    return penalty
+
+
 def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
     working_snapshot = dict(snapshot)
     reasons: list[str] = []
@@ -293,9 +313,14 @@ def score_candidate(snapshot: dict[str, Any]) -> ScreenCandidate:
     score = max(sum(subscores.values()) - earnings_penalty - volatility_penalty - severe_weekly_penalty, 0)
     if (_as_float(working_snapshot, "sma_20") or 0.0) < (_as_float(working_snapshot, "sma_60") or 0.0):
         risks.append("중기 추세는 아직 하락 압력일 수 있음")
+    risk_adjustment_penalty = _risk_adjustment_penalty(working_snapshot, risks)
+    risk_adjusted_score = max(score - risk_adjustment_penalty, 0)
+    working_snapshot["risk_adjustment_penalty"] = risk_adjustment_penalty
+    working_snapshot["risk_adjusted_score"] = risk_adjusted_score
     return ScreenCandidate(
         ticker=str(working_snapshot["ticker"]),
         score=score,
+        risk_adjusted_score=risk_adjusted_score,
         subscores=subscores,
         reasons=list(dict.fromkeys(reasons)),
         risks=list(dict.fromkeys(risks)),
@@ -310,4 +335,4 @@ def rank_candidates(rows: Iterable[dict[str, Any]]) -> list[ScreenCandidate]:
         for candidate in (score_candidate(row) for row in filter_candidates(rows))
         if candidate.score >= thresholds.MINIMUM_TOTAL_SCORE
     ]
-    return sorted(scored, key=lambda candidate: (-candidate.score, candidate.ticker))
+    return sorted(scored, key=lambda candidate: (-candidate.risk_adjusted_score, -candidate.score, candidate.ticker))

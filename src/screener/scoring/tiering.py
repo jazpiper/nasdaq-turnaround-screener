@@ -67,7 +67,7 @@ def classify_investability_tier(
 
     missing_buy_review: list[str] = []
     if score < t.min_score:
-        missing_buy_review.append("score below buy-review threshold")
+        missing_buy_review.append("risk-adjusted score below buy-review threshold")
     if reversal_score < t.min_reversal:
         missing_buy_review.append("reversal evidence is not strong enough")
     if volume_ratio is None or volume_ratio < t.min_volume_ratio:

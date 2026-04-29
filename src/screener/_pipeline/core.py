@@ -51,7 +51,7 @@ class RankedCandidateScorer:
         candidate = ranked[0]
         indicator_snapshot = build_indicator_snapshot(candidate.snapshot)
         tier = classify_investability_tier(
-            score=candidate.score,
+            score=candidate.risk_adjusted_score,
             subscores=candidate.subscores,
             risks=candidate.risks,
             snapshot=indicator_snapshot,
@@ -61,6 +61,7 @@ class RankedCandidateScorer:
             ticker=candidate.ticker,
             name=ticker.name,
             score=candidate.score,
+            risk_adjusted_score=candidate.risk_adjusted_score,
             subscores=ScoreBreakdown(**candidate.subscores),
             tier=tier.tier,
             tier_reasons=tier.reasons,
@@ -154,7 +155,7 @@ class ScreenPipeline:
             except Exception as exc:  # pragma: no cover
                 failures.append(f"{ticker.ticker}: {exc}")
 
-        candidates.sort(key=lambda candidate: (-candidate.score, candidate.ticker))
+        candidates.sort(key=lambda candidate: (-_selection_score(candidate), -candidate.score, candidate.ticker))
 
         planned_tickers = [item.ticker for item in tickers]
 
@@ -259,3 +260,7 @@ __all__ = [
     "ScreenPipeline",
     "build_context",
 ]
+
+
+def _selection_score(candidate: CandidateResult) -> int:
+    return candidate.risk_adjusted_score if candidate.risk_adjusted_score is not None else candidate.score

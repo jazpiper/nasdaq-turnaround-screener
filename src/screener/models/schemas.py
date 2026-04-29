@@ -25,6 +25,7 @@ class CandidateResult(BaseModel):
     ticker: str
     name: str | None = None
     score: int
+    risk_adjusted_score: int | None = None
     subscores: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     tier: str = "watchlist"
     tier_reasons: list[str] = Field(default_factory=list)

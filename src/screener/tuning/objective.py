@@ -33,7 +33,7 @@ def reclassify_tier(observation: BacktestObservation, thresholds: TierThresholds
     does not need to be re-run.
     """
     decision = classify_investability_tier(
-        score=observation.score,
+        score=observation.risk_adjusted_score if observation.risk_adjusted_score is not None else observation.score,
         subscores=observation.subscores,
         risks=observation.risks,
         snapshot=observation.snapshot,

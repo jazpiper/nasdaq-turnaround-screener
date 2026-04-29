@@ -329,6 +329,44 @@ def test_pipeline_passes_benchmark_context_to_alert_builder(tmp_path: Path) -> N
     ]
 
 
+def test_ranked_candidate_scorer_uses_risk_adjusted_score_for_tier() -> None:
+    scorer = RankedCandidateScorer()
+    context = build_context(
+        run_date=date(2026, 4, 21),
+        generated_at=datetime(2026, 4, 21, 20, 0, tzinfo=timezone.utc),
+        dry_run=True,
+    )
+    indicators = {
+        "close": 97.0,
+        "low": 96.5,
+        "bb_lower": 97.5,
+        "rsi_14": 27.0,
+        "distance_to_20d_low": 2.0,
+        "distance_to_60d_low": 4.0,
+        "volume_ratio_20d": 1.1,
+        "average_volume_20d": 2_500_000.0,
+        "bars_available": 90,
+        "sma_5": 98.0,
+        "sma_20": 100.0,
+        "sma_60": 104.0,
+        "close_improvement_streak": 3,
+        "rsi_3d_change": 4.0,
+        "market_context_score": 10.0,
+        "weekly_trend_severe_damage": False,
+        "weekly_trend_penalty": 0.0,
+        "rel_strength_20d_vs_qqq": -8.0,
+        "rel_strength_60d_vs_qqq": -12.0,
+    }
+
+    candidate = scorer.evaluate(TickerInput(ticker="LAG"), indicators, context)
+
+    assert candidate is not None
+    assert candidate.score >= 60
+    assert candidate.risk_adjusted_score < 60
+    assert candidate.tier == "watchlist"
+    assert "risk-adjusted score below buy-review threshold" in candidate.tier_reasons
+
+
 def test_pipeline_raises_alert_sidecar_error_after_writing_raw_artifacts(tmp_path: Path, monkeypatch) -> None:
     histories = {
         "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),

@@ -38,6 +38,8 @@ INDICATOR_SNAPSHOT_KEYS: tuple[str, ...] = (
     "rel_strength_20d_vs_qqq",
     "rel_strength_60d_vs_qqq",
     "relative_strength_score",
+    "risk_adjustment_penalty",
+    "risk_adjusted_score",
     "earnings_data_available",
     "next_earnings_date",
     "days_to_next_earnings",
@@ -90,4 +92,3 @@ __all__ = [
     "INDICATOR_SNAPSHOT_SCHEMA_VERSION",
     "build_indicator_snapshot",
 ]
-

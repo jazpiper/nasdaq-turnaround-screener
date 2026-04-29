@@ -39,6 +39,10 @@ cd /home/ubuntu/project/nasdaq-turnaround-screener
 uv run python -m screener.cli.main init-oracle-schema
 ```
 
+업그레이드 주의:
+- `risk_adjusted_score` 도입 이후 Oracle SQL persistence를 쓰는 환경은 배포 후 다음 `--persist-oracle-sql` job 실행 전에 위 schema 초기화 명령을 다시 1회 실행해야 합니다.
+- schema 초기화는 기존 테이블에 누락 컬럼을 추가하는 additive migration이며, persistence write path는 런타임 DDL을 수행하지 않습니다.
+
 ## 4. Secrets And Environment
 `OpenClaw` 는 아래 값들을 환경변수 또는 `~/.openclaw/secrets.json` 로 주입하면 됩니다.
 
@@ -96,6 +100,7 @@ cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --d
 설명:
 - daily final은 same-day intraday snapshot을 반영하려면 `--use-staged-intraday` 를 쓰는 것을 권장
 - daily final artifact가 같은 날짜 provisional artifact보다 우선합니다.
+- Oracle SQL persistence를 켠 daily producer는 `risk_adjusted_score` 컬럼이 준비되어 있어야 insert가 성공합니다.
 
 ### Consumer Jobs
 consumer는 producer가 이미 만든 stable sidecar를 읽고, 새 dedupe key가 있을 때만 Telegram delivery를 수행합니다.

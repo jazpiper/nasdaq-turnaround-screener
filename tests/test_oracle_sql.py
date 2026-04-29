@@ -57,6 +57,7 @@ def make_screen_result(tmp_path: Path) -> ScreenRunResult:
             CandidateResult(
                 ticker="AAPL",
                 score=78,
+                risk_adjusted_score=71,
                 subscores=ScoreBreakdown(oversold=20, bottom_context=17, reversal=23, volume=10, market_context=8),
                 close=172.4,
                 lower_bb=171.9,
@@ -158,6 +159,7 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     assert connection.committed is True
     assert any("CREATE TABLE screen_runs" in statement for statement, _ in connection.statements)
     assert any("ALTER TABLE screen_candidates ADD ( indicator_snapshot_json CLOB )" in statement for statement, _ in connection.statements)
+    assert any("ALTER TABLE screen_candidates ADD ( risk_adjusted_score NUMBER )" in statement for statement, _ in connection.statements)
 
 
 def test_persist_daily_run_inserts_without_schema_ddl(tmp_path: Path) -> None:
@@ -175,6 +177,7 @@ def test_persist_daily_run_inserts_without_schema_ddl(tmp_path: Path) -> None:
     assert not any("ALTER TABLE" in statement for statement, _ in connection.statements)
     candidate_insert = next(parameters for statement, parameters in connection.statements if "INSERT INTO screen_candidates" in statement)
     assert candidate_insert is not None
+    assert candidate_insert["risk_adjusted_score"] == 71
     assert "volume_ratio_20d" in candidate_insert["indicator_snapshot_json"]
     assert "volatility_penalty" in candidate_insert["indicator_snapshot_json"]
     assert "gap_down_reclaim" in candidate_insert["indicator_snapshot_json"]

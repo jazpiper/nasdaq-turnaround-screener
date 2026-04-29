@@ -22,6 +22,7 @@ _REVERSAL_REASON_HINTS = (
 _OVERSOLD_REASON_HINTS = ("BB 하단", "과매도", "저점", "재진입")
 _EXTENDED_STATE_KEYS = {
     "last_score",
+    "last_risk_adjusted_score",
     "last_rank",
     "last_headline_reason",
     "last_headline_risk",
@@ -100,6 +101,7 @@ def material_signature(candidate: CandidateResult, *, rank: int) -> str:
         [
             str(candidate.score),
             str(rank),
+            str(selection_score(candidate)),
             candidate.tier,
             headline_reason(candidate),
             headline_risk(candidate),
@@ -144,6 +146,9 @@ def determine_change_status(
 
     previous_tier = previous_state.get("last_delivery_tier")
     previous_score = int(previous_state.get("last_score", candidate.score) or candidate.score)
+    previous_selection_score = int(
+        previous_state.get("last_risk_adjusted_score", previous_score) or previous_score
+    )
     previous_rank = int(previous_state.get("last_rank", rank) or rank)
     previous_headline_reason = previous_state.get("last_headline_reason")
     previous_headline_risk = previous_state.get("last_headline_risk")
@@ -156,12 +161,13 @@ def determine_change_status(
     current_earnings_penalty = int(snapshot.get("earnings_penalty", 0) or 0)
     current_volatility_penalty = int(snapshot.get("volatility_penalty", 0) or 0)
     score_delta = abs(candidate.score - previous_score)
+    selection_score_delta = abs(selection_score(candidate) - previous_selection_score)
     rank_delta = abs(rank - previous_rank)
     has_extended_previous_state = _has_extended_previous_state(previous_state)
 
-    if previous_tier == "digest" and rank <= 5 and candidate.score >= 60:
+    if previous_tier == "digest" and rank <= 5 and selection_score(candidate) >= 60:
         return "upgraded"
-    if score_delta >= 5 or rank_delta >= 2:
+    if score_delta >= 5 or selection_score_delta >= 5 or rank_delta >= 2:
         return "material_change"
     if not has_extended_previous_state:
         return "unchanged"
@@ -179,23 +185,28 @@ def determine_change_status(
     return "unchanged"
 
 
+def selection_score(candidate: CandidateResult) -> int:
+    return candidate.risk_adjusted_score if candidate.risk_adjusted_score is not None else candidate.score
+
+
 def classify_candidate(candidate: CandidateResult, *, rank: int, change_status: str) -> str:
     snapshot = candidate.indicator_snapshot or {}
     earnings_penalty = int(snapshot.get("earnings_penalty", 0) or 0)
     volatility_penalty = int(snapshot.get("volatility_penalty", 0) or 0)
     reason_count = len(candidate.reasons)
+    adjusted_score = selection_score(candidate)
 
     if (
         candidate.tier == AVOID_HIGH_RISK_TIER
-        or candidate.score < 45
+        or adjusted_score < 45
         or reason_count < 2
         or earnings_penalty >= 8
-        or (volatility_penalty >= 4 and candidate.score < 60)
+        or (volatility_penalty >= 4 and adjusted_score < 60)
     ):
         return "suppressed"
     if (
         candidate.tier == BUY_REVIEW_TIER
-        and candidate.score >= 60
+        and adjusted_score >= 60
         and rank <= 5
         and change_status in {"new", "upgraded", "material_change"}
         and _has_single_reason_mix(candidate)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
 from datetime import date
@@ -41,15 +42,19 @@ class BacktestObservation:
     # stored for tuning-loop re-classification without re-running scoring
     subscores: dict[str, int] = dataclasses_field(default_factory=dict)
     snapshot: dict[str, Any] = dataclasses_field(default_factory=dict)
+    risk_adjusted_score: int | None = None
 
     def as_row(self, forward_horizons: tuple[int, ...]) -> dict[str, Any]:
         row: dict[str, Any] = {
             "run_date": self.run_date.isoformat(),
             "ticker": self.ticker,
             "score": self.score,
+            "risk_adjusted_score": _observation_risk_adjusted_score(self),
             "tier": self.tier,
             "reasons": " | ".join(self.reasons),
             "risks": " | ".join(self.risks),
+            "subscores_json": json.dumps(self.subscores, ensure_ascii=False, sort_keys=True, default=str),
+            "snapshot_json": json.dumps(self.snapshot, ensure_ascii=False, sort_keys=True, default=str),
         }
         for horizon in forward_horizons:
             row[f"forward_return_{horizon}d"] = self.forward_returns.get(horizon)
@@ -171,10 +176,11 @@ class HistoricalBacktestRunner:
                         ),
                         subscores=_candidate_subscores(candidate),
                         snapshot=_candidate_snapshot(candidate),
+                        risk_adjusted_score=_candidate_risk_adjusted_score(candidate),
                     )
                 )
 
-        observations.sort(key=lambda item: (item.run_date, -item.score, item.ticker))
+        observations.sort(key=lambda item: (item.run_date, -_observation_risk_adjusted_score(item), -item.score, item.ticker))
         return observations, data_failures, len(trading_dates)
 
     def run(
@@ -201,7 +207,17 @@ class HistoricalBacktestRunner:
             "forward_return_summary": _summarize_forward_returns(observations, forward_horizons),
             "tier_forward_return_summary": _summarize_by_tier(observations, forward_horizons),
             "score_cutoff_forward_return_summary": _summarize_by_score_cutoff(observations, forward_horizons),
+            "risk_adjusted_score_cutoff_forward_return_summary": _summarize_by_score_cutoff(
+                observations,
+                forward_horizons,
+                use_risk_adjusted_score=True,
+            ),
             "daily_top_n_forward_return_summary": _summarize_daily_top_n(observations, forward_horizons),
+            "risk_adjusted_daily_top_n_forward_return_summary": _summarize_daily_top_n(
+                observations,
+                forward_horizons,
+                use_risk_adjusted_score=True,
+            ),
             "data_failures": data_failures,
         }
 
@@ -315,6 +331,17 @@ def _candidate_snapshot(candidate: Any) -> dict[str, Any]:
     return dict(snapshot)
 
 
+def _candidate_risk_adjusted_score(candidate: Any) -> int | None:
+    value = getattr(candidate, "risk_adjusted_score", None)
+    if value is None:
+        return None
+    return int(value)
+
+
+def _observation_risk_adjusted_score(observation: BacktestObservation) -> int:
+    return observation.risk_adjusted_score if observation.risk_adjusted_score is not None else observation.score
+
+
 def _summarize_forward_returns(
     observations: list[BacktestObservation],
     forward_horizons: tuple[int, ...],
@@ -345,12 +372,18 @@ def _summarize_by_tier(
 def _summarize_by_score_cutoff(
     observations: list[BacktestObservation],
     forward_horizons: tuple[int, ...],
+    *,
+    use_risk_adjusted_score: bool = False,
 ) -> dict[str, dict[str, dict[str, float | int | None]]]:
     cutoffs = (40, 45, 50, 55, 60)
     return {
         f"score_gte_{cutoff}": {
             f"{horizon}d": _return_stats(
-                [observation for observation in observations if observation.score >= cutoff],
+                [
+                    observation
+                    for observation in observations
+                    if _score_for_summary(observation, use_risk_adjusted_score=use_risk_adjusted_score) >= cutoff
+                ],
                 horizon,
             )
             for horizon in forward_horizons
@@ -362,6 +395,8 @@ def _summarize_by_score_cutoff(
 def _summarize_daily_top_n(
     observations: list[BacktestObservation],
     forward_horizons: tuple[int, ...],
+    *,
+    use_risk_adjusted_score: bool = False,
 ) -> dict[str, dict[str, dict[str, float | int | None]]]:
     by_date: dict[date, list[BacktestObservation]] = {}
     for observation in observations:
@@ -372,13 +407,26 @@ def _summarize_daily_top_n(
         selected: list[BacktestObservation] = []
         for daily_observations in by_date.values():
             selected.extend(
-                sorted(daily_observations, key=lambda observation: (-observation.score, observation.ticker))[:top_n]
+                sorted(
+                    daily_observations,
+                    key=lambda observation: (
+                        -_score_for_summary(observation, use_risk_adjusted_score=use_risk_adjusted_score),
+                        -observation.score,
+                        observation.ticker,
+                    ),
+                )[:top_n]
             )
         summary[f"top_{top_n}"] = {
             f"{horizon}d": _return_stats(selected, horizon)
             for horizon in forward_horizons
         }
     return summary
+
+
+def _score_for_summary(observation: BacktestObservation, *, use_risk_adjusted_score: bool) -> int:
+    if use_risk_adjusted_score:
+        return _observation_risk_adjusted_score(observation)
+    return observation.score
 
 
 def _return_stats(
@@ -415,7 +463,17 @@ def _median(values: list[float]) -> float:
 
 
 def _build_observation_csv(observations: list[BacktestObservation], forward_horizons: tuple[int, ...]) -> str:
-    fieldnames = ["run_date", "ticker", "score", "tier", "reasons", "risks"]
+    fieldnames = [
+        "run_date",
+        "ticker",
+        "score",
+        "risk_adjusted_score",
+        "tier",
+        "reasons",
+        "risks",
+        "subscores_json",
+        "snapshot_json",
+    ]
     for horizon in forward_horizons:
         fieldnames.extend(
             [

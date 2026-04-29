@@ -28,7 +28,18 @@
 - 총점과 각 subscore는 모두 정수(`int`)로 관리됩니다.
 - threshold 상수는 `src/screener/scoring/thresholds.py` 에 모여 있습니다.
 
-## 3. Oversold Context, max 25
+## 3. Risk-Adjusted Score
+`score` 는 넓은 turnaround 발견용 원점수이고, `risk_adjusted_score` 는 ranking / tier / alert 판단에 쓰는 선택 점수입니다.
+
+- `risk_adjusted_score = max(score - risk_adjustment_penalty, 0)`
+- `risk_adjustment_penalty` 는 약한 거래량, QQQ 대비 20일/60일 상대약세, risk flag 과다를 반영합니다.
+- 약한 거래량(`volume_ratio_20d < 0.8`)은 `3` 점 차감합니다.
+- 20일 상대약세(`rel_strength_20d_vs_qqq <= -5.0`)는 `3` 점 차감합니다.
+- 60일 상대약세(`rel_strength_60d_vs_qqq <= -8.0`)는 `4` 점 차감합니다.
+- risk flag는 3개까지 허용하고, 초과분은 flag당 `2` 점씩 차감합니다.
+- 후보 발견 자체는 raw `score` 기준으로 유지하되, 후보 정렬과 `buy-review` 승격은 `risk_adjusted_score` 를 우선합니다.
+
+## 4. Oversold Context, max 25
 주요 입력: `close`, `bb_lower`, `rsi_14`
 
 해석:
@@ -39,7 +50,7 @@
 - `BB 하단 근처 또는 재진입 구간`
 - `RSI 14가 과매도권 또는 초기 탈출 구간`
 
-## 4. Local Bottom Context, max 20
+## 5. Local Bottom Context, max 20
 주요 입력: `distance_to_20d_low`, `distance_to_60d_low`
 
 해석:
@@ -52,7 +63,7 @@
 - `최근 20일 저점 부근`
 - `중기 저점권과도 멀지 않음`
 
-## 5. Reversal Evidence, max 25
+## 6. Reversal Evidence, max 25
 주요 입력: `close`, `sma_5`, `close_improvement_streak`, `rsi_3d_change`
 
 해석:
@@ -65,7 +76,7 @@
 - `최근 2일 이상 종가 개선`
 - `5일선 아래에 머물러 반전 확인이 약함`
 
-## 6. Volume Behavior, max 15
+## 7. Volume Behavior, max 15
 주요 입력: `volume_ratio_20d`
 
 해석:
@@ -79,7 +90,7 @@
 - `반등 시도에 거래량 유입이 동반됨`
 - `거래량이 평균 대비 약해 신호 신뢰도가 낮을 수 있음`
 
-## 7. Weekly Trend / Market Context, max 15
+## 8. Weekly Trend / Market Context, max 15
 주요 입력:
 - `weekly_close`, `weekly_sma_5`, `weekly_sma_10`
 - `weekly_close_improving`, `weekly_trend_penalty`, `weekly_trend_severe_damage`
@@ -109,7 +120,7 @@
 - `주봉 추세가 심하게 훼손돼 반전 신뢰도가 낮음`
 - `시장/섹터 맥락 확인이 필요함`
 
-## 8. Earnings Risk Overlay
+## 9. Earnings Risk Overlay
 주요 입력:
 - `earnings_data_available`
 - `next_earnings_date`
@@ -132,7 +143,7 @@
 - `실적 발표가 가까워 변동성 리스크가 있음`
 - `실적 발표 직후 변동성 구간일 수 있음`
 
-## 9. Volatility Normalization Overlay
+## 10. Volatility Normalization Overlay
 주요 입력: `atr_14`, `atr_14_pct`, `daily_range_pct`, `bb_width_pct`, `volatility_penalty`
 
 현재 구현 로직:
@@ -151,7 +162,7 @@
 - `일중 range가 커서 신호 품질이 불안정함`
 - `볼린저 밴드 폭이 넓어 아직 구조가 불안정함`
 
-## 10. Candle Structure / Reversal Quality
+## 11. Candle Structure / Reversal Quality
 주요 입력:
 - `close_above_open`
 - `close_location_value`
@@ -183,59 +194,62 @@
 - `종가가 일중 하단에 머물러 매수 우위 확인이 약함`
 - `상단 꼬리가 길어 추격 매수 실패 가능성이 남아 있음`
 
-## 11. Extra Risk Note
+## 12. Extra Risk Note
 추가로 아래 조건이면 risk를 더 붙입니다.
 - `sma_20 < sma_60`
 
 대표 risk:
 - `중기 추세는 아직 하락 압력일 수 있음`
 
-## 12. Ranking Philosophy
+## 13. Ranking Philosophy
 가장 많이 빠진 종목이 아니라, `과매도 + 저점 형성 + 전환 신호` 조합이 좋은 종목을 우선합니다.
 - 총점이 `1` 미만인 후보는 노이즈를 줄이기 위해 정렬 대상에서 제외합니다.
-- 동점이면 ticker 알파벳순으로 정렬합니다.
+- 후보 정렬은 `risk_adjusted_score` 내림차순, raw `score` 내림차순, ticker 알파벳순입니다.
 
-## 13. Investability Tier
-`score` 는 turnaround quality를 넓게 재는 값이고, `tier` 는 실제 매수 검토 가능성을 좁히는 2차 분류입니다.
+## 14. Investability Tier
+`score` 는 turnaround quality를 넓게 재는 값이고, `risk_adjusted_score` 와 `tier` 는 실제 매수 검토 가능성을 좁히는 2차 분류입니다.
 
 현재 tier:
-- `buy-review`: 매수 검토 후보. 기본 조건은 `score >= 60`, `reversal >= 15`, `volume_ratio_20d >= 0.8`, risk 개수 `<= 3`, severe weekly damage 없음, 실적 임박 penalty 없음, 높은 volatility penalty 없음입니다.
+- `buy-review`: 매수 검토 후보. 기본 조건은 `risk_adjusted_score >= 60`, `reversal >= 15`, `volume_ratio_20d >= 0.8`, risk 개수 `<= 3`, severe weekly damage 없음, 실적 임박 penalty 없음, 높은 volatility penalty 없음입니다.
 - `watchlist`: 후보로는 남기지만 매수 검토 조건 중 일부가 부족한 상태입니다.
 - `avoid/high-risk`: severe weekly damage, 실적 임박 penalty, 높은 volatility penalty, 또는 risk flag 과다로 매수 검토에서 제외하는 상태입니다.
 
 Report와 JSON artifact에는 `tier` 와 `tier_reasons` 가 함께 기록됩니다. Markdown report는 전체 후보와 별도로 `Buy Review Candidates` 섹션을 먼저 보여줍니다.
 
-## 14. Intraday Staged Quote Policy
+## 15. Intraday Staged Quote Policy
 `prefer-staged` 모드에서 Twelve Data 1분봉 quote는 최신 가격 확인용으로만 일봉 히스토리에 병합합니다.
 
 - 같은 거래일의 정규 일봉이 이미 있으면 staged quote의 `close` 는 반영하되, `volume` 은 기존 정규 일봉 volume을 유지합니다.
 - 정규 일봉보다 staged quote 날짜가 늦으면 새 synthetic bar를 추가하되, 1분봉 volume 대신 직전 최대 20개 일봉 평균 volume을 사용해 `volume_ratio_20d` 를 중립화합니다.
 - 이 정책은 1분봉 단일 volume이 daily volume처럼 계산되어 `volume_ratio_20d` 를 0에 가깝게 왜곡하는 문제를 막기 위한 것입니다.
 
-## 15. Backtest Evaluation
+## 16. Backtest Evaluation
 Backtest artifact는 전체 후보 평균뿐 아니라 아래 summary를 함께 기록합니다.
 
 - `tier_forward_return_summary`
 - `score_cutoff_forward_return_summary`
+- `risk_adjusted_score_cutoff_forward_return_summary`
 - `daily_top_n_forward_return_summary`
+- `risk_adjusted_daily_top_n_forward_return_summary`
 
 각 summary는 horizon별 count, 평균 수익률, median 수익률, win rate, QQQ 대비 평균 excess return을 포함합니다.
+`backtest-observations.csv` 는 후속 분석을 위해 `risk_adjusted_score`, `subscores_json`, `snapshot_json` 도 함께 저장합니다.
 
-## 16. Candidate Snapshot Coverage
+## 17. Candidate Snapshot Coverage
 현재 candidate snapshot에는 아래 묶음이 저장됩니다.
 - base technicals: `close`, `low`, `bb_lower`, `rsi_14`, `sma_5`, `sma_20`, `sma_60`
 - bottom / volume context: `distance_to_20d_low`, `distance_to_60d_low`, `average_volume_20d`, `volume_ratio_20d`
 - short-term reversal context: `close_improvement_streak`, `rsi_3d_change`
 - weekly context: `weekly_*`, `market_context_score`
 - benchmark context: `qqq_return_*`, `stock_return_*`, `rel_strength_*`
-- scoring-derived field: `relative_strength_score`
+- scoring-derived fields: `relative_strength_score`, `risk_adjustment_penalty`, `risk_adjusted_score`
   - 이 값은 upstream raw input이 아니라 scoring 단계가 `market_context` subscore를 기록하면서 채우는 값입니다.
 - earnings overlay: `earnings_data_available`, `next_earnings_date`, `days_to_next_earnings`, `days_since_last_earnings`, `earnings_penalty`
 - volatility overlay: `atr_14`, `atr_14_pct`, `daily_range_pct`, `bb_width_pct`, `volatility_penalty`
 - severe weekly overlay: `weekly_trend_severe_damage`, `severe_weekly_penalty`
 - candle structure: `close_above_open`, `close_location_value`, `lower_wick_ratio`, `upper_wick_ratio`, `real_body_pct`, `gap_down_pct`, `gap_down_reclaim`, `inside_day`, `bullish_engulfing_like`
 
-## 17. Human Review Checklist
+## 18. Human Review Checklist
 최종 후보 확인 시 아래를 같이 봅니다.
 - 실적 발표 일정
 - 섹터 뉴스
