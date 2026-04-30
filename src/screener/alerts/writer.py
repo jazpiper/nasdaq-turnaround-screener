@@ -15,8 +15,9 @@ def build_intraday_alert_paths(run_directory: Path, run_date: str) -> tuple[Path
     return run_directory / "alert-events.json", date_root / "latest-alert-events.json"
 
 
-def write_alert_document(run_path: Path, stable_path: Path, document: AlertDocument) -> tuple[Path, Path]:
+def write_alert_document(run_path: Path, stable_path: Path | None, document: AlertDocument) -> tuple[Path, Path | None]:
     payload = document.model_dump(mode="json")
     write_json_atomic(run_path, payload)
-    write_json_atomic(stable_path, payload)
+    if stable_path is not None:
+        write_json_atomic(stable_path, payload)
     return run_path, stable_path

@@ -45,6 +45,7 @@ def build_markdown_report(result: ScreenRunResult) -> str:
                 [
                     f"### {heading}",
                     f"- score: {candidate.score}",
+                    _risk_adjusted_score_line(candidate.risk_adjusted_score),
                     f"- tier_reasons: {', '.join(candidate.tier_reasons) if candidate.tier_reasons else 'n/a'}",
                     f"- reasons: {', '.join(candidate.reasons) if candidate.reasons else 'n/a'}",
                     f"- risks: {', '.join(candidate.risks) if candidate.risks else 'n/a'}",
@@ -59,6 +60,7 @@ def build_markdown_report(result: ScreenRunResult) -> str:
             [
                 f"### {heading}",
                 f"- score: {candidate.score}",
+                _risk_adjusted_score_line(candidate.risk_adjusted_score),
                 f"- tier: {candidate.tier}",
                 f"- reasons: {', '.join(candidate.reasons) if candidate.reasons else 'n/a'}",
                 f"- risks: {', '.join(candidate.risks) if candidate.risks else 'n/a'}",
@@ -67,3 +69,9 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _risk_adjusted_score_line(risk_adjusted_score: int | None) -> str:
+    if risk_adjusted_score is None:
+        return "- risk_adjusted_score: n/a"
+    return f"- risk_adjusted_score: {risk_adjusted_score}"

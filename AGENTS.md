@@ -10,7 +10,8 @@
 - `uv sync --extra dev` creates/updates `.venv` from `uv.lock` with development dependencies.
 - `uv run python -m screener.cli.main run --date 2026-04-21 --dry-run` runs the daily screener without writing artifacts.
 - `uv run python scripts/run_daily.py --date 2026-04-21 --skip-install` runs the daily wrapper and updates `output/daily/latest`.
-- `uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0` executes an intraday collection window.
+- `uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install` runs the operational intraday wrapper for the full universe.
+- `uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0` executes one raw intraday shard using the CLI defaults.
 - `uv run python -m screener.cli.main init-oracle-schema` initializes Oracle tables before persistence is enabled.
 - `uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21` replays historical candidate generation and writes forward-return artifacts.
 - `uv run pytest` runs the full suite; use `uv run pytest tests/test_cli.py -q` for targeted iteration.
@@ -23,8 +24,15 @@
 
 ## Testing Guidelines
 - Use pytest with files named `test_*.py` and test functions named `test_<behavior>`.
-- Mirror the production surface area when adding tests: CLI changes go in `tests/test_cli.py`, pipeline logic in `tests/test_pipeline.py`, and provider/storage work in the matching module test.
+- Mirror the production surface area when adding tests: CLI changes go in `tests/test_cli.py`, pipeline logic in `tests/test_pipeline.py`, alerts in `tests/test_alert_*.py`, intraday behavior in `tests/test_intraday_*.py`, tuning in `tests/test_tuning_*.py`, and provider/storage work in the matching module test.
 - Prefer stubs and `monkeypatch` over live API or Oracle dependencies. Cover artifact paths, CLI output, and persistence toggles.
+
+## Operational Notes
+- Treat `--date` values as `America/New_York` trading dates, especially when running from UTC or KST schedulers.
+- `scripts/run_daily.py` is the normal daily operational entrypoint because it updates `output/daily/latest` after the dated run completes.
+- OpenClaw-style consumers read stable alert entrypoints such as `output/daily/latest/alert-events.json` and `output/intraday/<NY_DATE>/latest-alert-events.json`; regenerate these artifacts through the runners instead of editing them manually.
+- When changing alert sidecars, latest-pointer behavior, or generated report schemas, cover both dated artifacts and stable entrypoints in tests.
+- When adding or changing Oracle persisted columns, update schema initialization/migration paths and verify `init-oracle-schema` remains additive.
 
 ## Commit & Pull Request Guidelines
 - Follow the repository’s existing commit style: `feat: ...`, `docs: ...`, written in the imperative mood.

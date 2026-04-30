@@ -229,6 +229,41 @@ def test_pipeline_writes_daily_alert_sidecar(tmp_path: Path) -> None:
     assert state.tickers == {}
 
 
+def test_pipeline_does_not_write_stable_alert_through_stale_latest_symlink(tmp_path: Path) -> None:
+    output_root = tmp_path / "daily"
+    previous_dir = output_root / "2026-04-29"
+    output_dir = output_root / "2026-04-30"
+    previous_dir.mkdir(parents=True)
+    (previous_dir / "alert-events.json").write_text('{"run_date":"2026-04-29"}\n', encoding="utf-8")
+    (output_root / "latest").symlink_to(previous_dir.name, target_is_directory=True)
+    histories = {
+        "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
+    }
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=output_dir),
+        universe_provider=type("SingleTickerUniverse", (), {"load_universe": lambda self, context: [TickerInput(ticker="AAPL")]})(),
+        market_data_provider=YFinanceMarketDataProvider(fetcher=StubFetcher(histories)),
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=RankedCandidateScorer(),
+        benchmark_market_data_provider=make_benchmark_provider(),
+    )
+
+    _, artifacts = pipeline.run(
+        build_context(
+            run_date=date(2026, 4, 30),
+            generated_at=datetime(2026, 4, 30, 20, 0, tzinfo=timezone.utc),
+            output_dir=output_dir,
+        )
+    )
+
+    assert artifacts.alert_events_path == output_dir / "alert-events.json"
+    assert artifacts.alert_events_path.exists()
+    assert artifacts.stable_alert_events_path is None
+    assert json.loads((previous_dir / "alert-events.json").read_text(encoding="utf-8")) == {
+        "run_date": "2026-04-29"
+    }
+
+
 def test_pipeline_passes_benchmark_context_to_alert_builder(tmp_path: Path) -> None:
     from datetime import date as dt_date
 
@@ -496,7 +531,7 @@ def test_indicator_engine_includes_candle_structure_metrics() -> None:
     assert isinstance(indicators["bullish_engulfing_like"], bool)
 
 
-def test_pipeline_rejects_candidate_when_weekly_trend_damage_is_severe(tmp_path: Path) -> None:
+def test_pipeline_marks_candidate_risky_when_weekly_trend_damage_is_severe(tmp_path: Path) -> None:
     history = make_history(start_close=260.0, days=90, rebound_days=1, rebound_step=-1.5, decline_step=1.5)
     pipeline = ScreenPipeline(
         settings=Settings(output_dir=tmp_path),

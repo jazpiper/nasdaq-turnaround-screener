@@ -78,8 +78,8 @@ def _score_oversold(snapshot: dict[str, Any], reasons: list[str]) -> int:
     close = _as_float(snapshot, "close") or 0.0
     lower_bb = _as_float(snapshot, "bb_lower") or close
     rsi_14 = _as_float(snapshot, "rsi_14") or 50.0
-    band_distance = 0.0 if lower_bb == 0 else abs(close - lower_bb) / abs(lower_bb)
-    proximity_score = _clip(1.0 - (band_distance / thresholds.OVERSOLD_BB_DISTANCE_SCALE))
+    signed_band_distance = 0.0 if lower_bb == 0 else (close - lower_bb) / abs(lower_bb)
+    proximity_score = _clip(1.0 - (signed_band_distance / thresholds.OVERSOLD_BB_DISTANCE_SCALE))
     rsi_score = _clip((thresholds.OVERSOLD_RSI_TRIGGER - rsi_14) / thresholds.OVERSOLD_RSI_RANGE)
     score = int(round((0.6 * proximity_score + 0.4 * rsi_score) * thresholds.OVERSOLD_MAX_SCORE))
     if close <= lower_bb * thresholds.LOWER_BOLLINGER_TOLERANCE:
@@ -107,7 +107,11 @@ def _score_reversal(snapshot: dict[str, Any], reasons: list[str], risks: list[st
     sma_5 = _as_float(snapshot, "sma_5") or close
     close_streak = float(snapshot.get("close_improvement_streak", 0))
     rsi_slope = float(snapshot.get("rsi_3d_change", 0.0))
-    below_sma_penalty = 0.0 if close >= sma_5 else thresholds.REVERSAL_BELOW_SMA_PENALTY
+    below_sma_distance = 0.0 if close >= sma_5 or sma_5 == 0 else (sma_5 - close) / abs(sma_5)
+    below_sma_penalty = (
+        _clip(below_sma_distance / thresholds.REVERSAL_BELOW_SMA_DISTANCE_SCALE)
+        * thresholds.REVERSAL_BELOW_SMA_PENALTY
+    )
     streak_score = _clip(close_streak / thresholds.REVERSAL_CLOSE_STREAK_TARGET)
     sma_score = 1.0 - below_sma_penalty
     rsi_score = _clip((rsi_slope - thresholds.REVERSAL_RSI_CHANGE_FLOOR) / thresholds.REVERSAL_RSI_CHANGE_RANGE)

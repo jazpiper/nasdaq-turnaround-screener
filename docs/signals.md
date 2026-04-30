@@ -43,8 +43,9 @@
 주요 입력: `close`, `bb_lower`, `rsi_14`
 
 해석:
-- Bollinger lower band 근처일수록 점수 가산
+- Bollinger lower band 아래 또는 근처일수록 점수 가산. 같은 거리라면 band 아래 종가가 band 위 종가보다 더 높은 점수를 받습니다.
 - `RSI 14 <= 35` 일수록 점수 가산
+- 현재 `rsi_14` 는 Wilder smoothing이 아니라 단순 이동평균 기반 Cutler-style RSI로 계산됩니다. 외부 차트의 Wilder RSI와 직접 비교할 때는 값 차이가 날 수 있습니다.
 
 대표 reason:
 - `BB 하단 근처 또는 재진입 구간`
@@ -67,7 +68,7 @@
 주요 입력: `close`, `sma_5`, `close_improvement_streak`, `rsi_3d_change`
 
 해석:
-- 5일선 회복 여부
+- 5일선 회복 여부. 5일선 아래에 있을 때는 이진 패널티가 아니라 5일선과의 거리 비례 패널티를 적용합니다.
 - 최근 종가 개선 streak
 - RSI의 3일 변화량
 
@@ -103,6 +104,7 @@
 현재 구현 로직:
 - severe damage 조건이면 **필터 통과는 허용하되** `severe_weekly_penalty = 10` 을 차감하고 risk를 붙입니다.
   - severe damage는 `weekly_close < weekly_sma_10 * 0.85`, `weekly_sma_5 < weekly_sma_10`, `weekly_close_improving == false` 조합일 때 `true` 가 됩니다.
+- 이 penalty는 raw `score`에 주봉 훼손을 반영하기 위한 것이고, tier 단계의 `avoid/high-risk` 분류는 buy-review 승격을 차단하기 위한 별도 안전장치입니다.
 - 약한 훼손이면 `weekly_trend_penalty` 만 부여합니다.
   - `weekly_close < weekly_sma_10 * 0.9` 이고 `weekly_sma_5 < weekly_sma_10` 이며 개선 중이 아니면 penalty `6`
   - `weekly_close < weekly_sma_10 * 0.95` 이고 `weekly_sma_5 < weekly_sma_10` 이며 개선 중이 아니면 penalty `3`

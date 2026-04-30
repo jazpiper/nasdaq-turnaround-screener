@@ -210,7 +210,7 @@ class ScreenPipeline:
             result.metadata.model_dump(mode="json"),
         )
         try:
-            latest_dir = ensure_directory(output_dir.parent / "latest")
+            latest_dir = output_dir.parent / "latest"
             state_path = output_dir.parent / "alerts" / result.metadata.run_date.isoformat() / "alert-state.json"
             state = load_alert_state(state_path)
             document, next_state = build_daily_alert_document(
@@ -221,7 +221,8 @@ class ScreenPipeline:
                 metadata_path=str(metadata_path),
                 benchmark_context=benchmark_context,
             )
-            run_alert_path, stable_alert_path = build_daily_alert_paths(output_dir, latest_dir)
+            stable_alert_path = _daily_stable_alert_path(output_dir, latest_dir)
+            run_alert_path, _ = build_daily_alert_paths(output_dir, latest_dir)
             write_alert_document(run_alert_path, stable_alert_path, document)
             save_alert_state(state_path, next_state)
         except Exception as exc:
@@ -264,3 +265,10 @@ __all__ = [
 
 def _selection_score(candidate: CandidateResult) -> int:
     return candidate.risk_adjusted_score if candidate.risk_adjusted_score is not None else candidate.score
+
+
+def _daily_stable_alert_path(output_dir: Path, latest_dir: Path) -> Path | None:
+    if latest_dir.is_symlink() and latest_dir.resolve(strict=False) != output_dir.resolve(strict=False):
+        return None
+    ensure_directory(latest_dir)
+    return latest_dir / "alert-events.json"

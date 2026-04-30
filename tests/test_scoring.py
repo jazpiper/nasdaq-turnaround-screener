@@ -56,11 +56,23 @@ class ScoringTests(unittest.TestCase):
         self.assertGreater(ranked[0].score, ranked[1].score)
         self.assertIn("BB 하단 근처 또는 재진입 구간", ranked[0].reasons)
 
+    def test_oversold_score_rewards_below_lower_band_more_than_equal_distance_above(self):
+        below = score_candidate(make_snapshot("BELOW", close=96.0, low=95.5, bb_lower=100.0, rsi_14=35.0))
+        above = score_candidate(make_snapshot("ABOVE", close=104.0, low=99.0, bb_lower=100.0, rsi_14=35.0))
+
+        self.assertGreater(below.subscores["oversold"], above.subscores["oversold"])
+
+    def test_reversal_score_penalizes_distance_below_sma_proportionally(self):
+        barely_below = score_candidate(make_snapshot("BARELY", close=99.9, sma_5=100.0))
+        far_below = score_candidate(make_snapshot("FAR", close=95.0, sma_5=100.0))
+
+        self.assertGreater(barely_below.subscores["reversal"], far_below.subscores["reversal"])
+
     def test_rank_candidates_orders_by_risk_adjusted_score_before_raw_score(self):
         rows = [
             make_snapshot(
                 "RISKY",
-                close=97.0,
+                close=100.0,
                 bb_lower=97.5,
                 rsi_14=27.0,
                 volume_ratio_20d=1.1,
@@ -70,7 +82,7 @@ class ScoringTests(unittest.TestCase):
             ),
             make_snapshot(
                 "CLEAN",
-                close=98.5,
+                close=99.0,
                 bb_lower=97.0,
                 rsi_14=34.0,
                 volume_ratio_20d=1.1,
