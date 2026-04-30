@@ -111,7 +111,7 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 ## 6. Environment and Secrets
 - `SCREENER_MARKET_DATA_PROVIDER`: daily provider override (`yfinance`, `twelve-data`)
 - `TWELVE_DATA_API_KEY`: Twelve Data API key
-- `TWELVE_DATA_BASE_URL`: Twelve Data endpoint override
+- `TWELVE_DATA_BASE_URL`: Twelve Data endpoint override. API key가 query string으로 붙으므로 public routable `http(s)` endpoint만 허용되며, localhost/private IP/userinfo URL은 거부됩니다.
 - `SCREENER_EARNINGS_CALENDAR_PATH`: earnings calendar JSON path
 - `SCREENER_DAILY_INTRADAY_SOURCE_MODE=prefer-staged`: same-day staged quote 병합 활성화
 - `SCREENER_INTRADAY_WINDOW_IDS`: intraday window 목록 override
@@ -143,6 +143,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - daily report JSON/Markdown에는 candidate별 ticker와 company name이 함께 포함됩니다.
 - intraday raw artifact는 daily run 보강용이지만, OpenClaw는 provisional consumer entrypoint `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽을 수 있습니다.
 - same-day staged merge는 intraday metadata 전체를 읽는 것이 아니라, 각 run의 `completed_at` 또는 `started_at` 으로 최신 snapshot을 고른 뒤 `collected-quotes.json` 을 사용합니다.
+- 운영에서는 `output/daily`, `output/intraday`, `output/alerts` 를 screener producer 계정만 쓸 수 있게 두는 것을 권장합니다. consumer는 stable sidecar를 읽기만 하고 내부 artifact/state를 수정하지 않아야 합니다.
 
 ## 9. OpenClaw Command Template
 `SCREENER_INTRADAY_COLLECTOR_COMMAND` 를 쓰면 wrapper가 아래 placeholder를 치환합니다.

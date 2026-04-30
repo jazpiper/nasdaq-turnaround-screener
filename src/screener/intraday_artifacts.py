@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
+from math import isfinite
 from pathlib import Path
+from typing import Any
 
 from screener.data import DailyBar
 
@@ -53,38 +55,52 @@ def discover_latest_intraday_snapshot(output_root: Path, run_date: date) -> Stag
         quotes_path = run_directory / "collected-quotes.json"
         if not quotes_path.exists():
             continue
-        metadata = _read_json(metadata_path)
+        try:
+            metadata = _read_json(metadata_path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(metadata, dict):
+            continue
         completed_at_text = metadata.get("completed_at") or metadata.get("started_at")
         if not completed_at_text:
             continue
-        candidates.append((_parse_timestamp(completed_at_text), run_directory, metadata_path, quotes_path))
+        try:
+            completed_at = _parse_timestamp(str(completed_at_text))
+        except ValueError:
+            continue
+        if completed_at.date() != run_date:
+            continue
+        candidates.append((completed_at, run_directory, metadata_path, quotes_path))
 
     if not candidates:
         return None
 
-    completed_at, run_directory, metadata_path, quotes_path = max(candidates, key=lambda item: item[0])
-    quotes_payload = _read_json(quotes_path)
-    quotes_by_ticker: dict[str, StagedIntradayQuote] = {}
-    for quote_payload in quotes_payload.get("quotes", []):
-        ticker = str(quote_payload["ticker"]).upper()
-        quotes_by_ticker[ticker] = StagedIntradayQuote(
-            ticker=ticker,
-            timestamp=_parse_timestamp(str(quote_payload["timestamp"])),
-            open=float(quote_payload["open"]),
-            high=float(quote_payload["high"]),
-            low=float(quote_payload["low"]),
-            close=float(quote_payload["close"]),
-            volume=float(quote_payload["volume"]),
-            source_path=quotes_path,
-        )
+    for completed_at, run_directory, metadata_path, quotes_path in sorted(candidates, key=lambda item: item[0], reverse=True):
+        try:
+            quotes_payload = _read_json(quotes_path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(quotes_payload, dict):
+            continue
+        quotes_by_ticker: dict[str, StagedIntradayQuote] = {}
+        quote_payloads = quotes_payload.get("quotes", [])
+        if not isinstance(quote_payloads, list):
+            continue
+        for quote_payload in quote_payloads:
+            staged_quote = _parse_staged_quote(quote_payload, run_date=run_date, source_path=quotes_path)
+            if staged_quote is not None:
+                quotes_by_ticker[staged_quote.ticker] = staged_quote
+        if not quotes_by_ticker:
+            continue
 
-    return StagedIntradaySnapshot(
-        run_directory=run_directory,
-        metadata_path=metadata_path,
-        quotes_path=quotes_path,
-        completed_at=completed_at,
-        quotes_by_ticker=quotes_by_ticker,
-    )
+        return StagedIntradaySnapshot(
+            run_directory=run_directory,
+            metadata_path=metadata_path,
+            quotes_path=quotes_path,
+            completed_at=completed_at,
+            quotes_by_ticker=quotes_by_ticker,
+        )
+    return None
 
 
 def merge_history_with_staged_quote(history: list[DailyBar], staged_quote: StagedIntradayQuote | None) -> list[DailyBar]:
@@ -126,3 +142,37 @@ def _read_json(path: Path) -> dict:
 
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _parse_staged_quote(payload: Any, *, run_date: date, source_path: Path) -> StagedIntradayQuote | None:
+    if not isinstance(payload, dict):
+        return None
+    try:
+        ticker = str(payload["ticker"]).upper()
+        timestamp = _parse_timestamp(str(payload["timestamp"]))
+        open_price = float(payload["open"])
+        high = float(payload["high"])
+        low = float(payload["low"])
+        close = float(payload["close"])
+        volume = float(payload["volume"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not ticker or timestamp.date() != run_date:
+        return None
+    prices = (open_price, high, low, close)
+    if not all(isfinite(value) for value in (*prices, volume)):
+        return None
+    if any(value <= 0 for value in prices) or volume < 0:
+        return None
+    if high < max(open_price, low, close) or low > min(open_price, high, close):
+        return None
+    return StagedIntradayQuote(
+        ticker=ticker,
+        timestamp=timestamp,
+        open=open_price,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
+        source_path=source_path,
+    )

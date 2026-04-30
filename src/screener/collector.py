@@ -268,7 +268,7 @@ class TwelveDataWindowCollector:
             )
             provisional_result, _ = ScreenPipeline(settings=provisional_settings).run(provisional_context)
             state_path = output_root.parent / "alerts" / run_date.isoformat() / "alert-state.json"
-            state = load_alert_state(state_path)
+            state = load_alert_state(state_path, expected_run_date=run_date.isoformat())
             document, next_state = build_intraday_alert_document(
                 provisional_result,
                 collection_result=result,

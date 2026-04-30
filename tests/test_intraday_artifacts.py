@@ -49,6 +49,59 @@ def test_discover_latest_intraday_snapshot_picks_latest_completed_run(tmp_path: 
     assert snapshot.quotes_by_ticker['MSFT'].close == 201.5
 
 
+def test_discover_latest_intraday_snapshot_ignores_wrong_date_metadata(tmp_path: Path) -> None:
+    trusted_dir = write_snapshot(
+        tmp_path,
+        run_date='2026-04-21',
+        window='window-01-of-06',
+        run_id='run-20260421T153000Z',
+        completed_at='2026-04-21T15:30:00+00:00',
+        quotes=[{'ticker': 'AAPL', 'timestamp': '2026-04-21T15:29:00+00:00', 'open': 100, 'high': 101, 'low': 99, 'close': 100.5, 'volume': 10}],
+    )
+    write_snapshot(
+        tmp_path,
+        run_date='2026-04-21',
+        window='window-02-of-06',
+        run_id='run-20260421T235959Z',
+        completed_at='2026-04-22T00:00:00+00:00',
+        quotes=[{'ticker': 'MSFT', 'timestamp': '2026-04-21T23:59:00+00:00', 'open': 200, 'high': 202, 'low': 199, 'close': 201.5, 'volume': 20}],
+    )
+
+    snapshot = discover_latest_intraday_snapshot(tmp_path, date(2026, 4, 21))
+
+    assert snapshot is not None
+    assert snapshot.run_directory == trusted_dir
+    assert set(snapshot.quotes_by_ticker) == {'AAPL'}
+
+
+def test_discover_latest_intraday_snapshot_falls_back_from_invalid_latest_quotes(tmp_path: Path) -> None:
+    trusted_dir = write_snapshot(
+        tmp_path,
+        run_date='2026-04-21',
+        window='window-01-of-06',
+        run_id='run-20260421T150000Z',
+        completed_at='2026-04-21T15:00:00+00:00',
+        quotes=[{'ticker': 'AAPL', 'timestamp': '2026-04-21T14:59:00+00:00', 'open': 100, 'high': 101, 'low': 99, 'close': 100.5, 'volume': 10}],
+    )
+    write_snapshot(
+        tmp_path,
+        run_date='2026-04-21',
+        window='window-02-of-06',
+        run_id='run-20260421T153000Z',
+        completed_at='2026-04-21T15:30:00+00:00',
+        quotes=[
+            {'ticker': 'MSFT', 'timestamp': '2026-04-22T15:29:00+00:00', 'open': 200, 'high': 202, 'low': 199, 'close': 201.5, 'volume': 20},
+            {'ticker': 'NVDA', 'timestamp': '2026-04-21T15:29:00+00:00', 'open': 200, 'high': 190, 'low': 199, 'close': 201.5, 'volume': 20},
+        ],
+    )
+
+    snapshot = discover_latest_intraday_snapshot(tmp_path, date(2026, 4, 21))
+
+    assert snapshot is not None
+    assert snapshot.run_directory == trusted_dir
+    assert set(snapshot.quotes_by_ticker) == {'AAPL'}
+
+
 def test_merge_history_with_staged_quote_preserves_same_day_daily_volume() -> None:
     history = [
         DailyBar('AAPL', date(2026, 4, 20), 90, 91, 89, 90.5, 90.5, 1000),

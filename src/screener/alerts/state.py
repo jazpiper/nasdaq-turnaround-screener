@@ -35,11 +35,14 @@ class AlertState(BaseModel):
     digest: DigestAlertState | None = None
 
 
-def load_alert_state(path: Path) -> AlertState:
+def load_alert_state(path: Path, *, expected_run_date: str | None = None) -> AlertState:
     if not path.exists():
         return AlertState()
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return AlertState.model_validate(payload)
+    state = AlertState.model_validate(payload)
+    if expected_run_date is not None and state.run_date not in {None, expected_run_date}:
+        return AlertState()
+    return state
 
 
 def save_alert_state(path: Path, state: AlertState) -> Path:

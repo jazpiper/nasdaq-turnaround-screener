@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Iterable, Mapping, Protocol
-from urllib.parse import urlencode
+from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
 
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
@@ -41,6 +42,35 @@ class MarketDataProviderError(RuntimeError):
 class MarketDataFetcher(Protocol):
     def fetch(self, tickers: Iterable[str]) -> FetchResult:
         """Fetch normalized daily OHLCV bars for each ticker."""
+
+
+def _validate_twelve_data_base_url(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise MarketDataProviderError("Twelve Data base URL must use http or https")
+    if not parsed.hostname:
+        raise MarketDataProviderError("Twelve Data base URL must include a host")
+    if parsed.username or parsed.password:
+        raise MarketDataProviderError("Twelve Data base URL must not include userinfo")
+
+    hostname = parsed.hostname.strip().lower().rstrip(".")
+    if hostname in {"localhost"} or hostname.endswith(".localhost"):
+        raise MarketDataProviderError("Twelve Data base URL host must not be localhost")
+
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        return base_url
+
+    if (
+        host_ip.is_loopback
+        or host_ip.is_link_local
+        or host_ip.is_private
+        or host_ip.is_unspecified
+        or host_ip.is_reserved
+    ):
+        raise MarketDataProviderError("Twelve Data base URL host must be publicly routable")
+    return base_url
 
 
 def _read_url(url: str) -> str:
@@ -191,7 +221,7 @@ class TwelveDataDailyBarFetcher:
         self.api_key = api_key or os.getenv("TWELVE_DATA_API_KEY")
         self.interval = interval
         self.outputsize = outputsize
-        self.base_url = base_url
+        self.base_url = _validate_twelve_data_base_url(base_url)
         self.response_reader = response_reader or _read_url
 
     def fetch(self, tickers: Iterable[str]) -> FetchResult:

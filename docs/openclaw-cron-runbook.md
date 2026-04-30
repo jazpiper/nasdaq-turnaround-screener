@@ -23,6 +23,7 @@
 - cron 등록도 가능하면 `CRON_TZ=America/New_York` 기준으로 잡는 것을 권장
 - `--date` 는 항상 NY trading day를 명시적으로 넘긴다.
 - `OpenClaw` 가 거래일 계산이 가능하면 미국 휴장일 / 주말에는 실행을 생략하는 것이 가장 안전하다.
+- producer가 쓰는 `output/daily`, `output/intraday`, `output/alerts` 는 screener producer 계정만 write 가능하게 둔다. OpenClaw consumer는 stable sidecar를 read-only로 소비한다.
 
 ## 3. One-Time Bootstrap
 최초 1회만 수행하면 됩니다.
@@ -55,6 +56,7 @@ uv run python -m screener.cli.main init-oracle-schema
 참고:
 - 이 저장소는 환경변수가 없으면 기본적으로 `~/.openclaw/secrets.json` 을 읽습니다.
 - daily final run은 기본적으로 `yfinance` 를 쓰고, intraday collector는 `twelve-data` 를 사용합니다.
+- `TWELVE_DATA_BASE_URL` 을 override할 경우 API key가 query string에 붙으므로 public routable endpoint만 사용해야 합니다. 코드상 localhost/private IP/userinfo URL은 거부됩니다.
 
 ## 5. Recommended Scheduled Jobs
 아래는 권장 cadence입니다. 시간은 모두 `America/New_York` 기준입니다.

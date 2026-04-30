@@ -71,6 +71,93 @@ def test_no_proposal_status_exits_nonzero(tmp_path: Path) -> None:
     assert "no_proposal" in result.stdout or "no_proposal" in result.stderr
 
 
+# --- proposed bounds ---
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("min_score", -1),
+        ("min_reversal", 36),
+        ("min_volume_ratio", 5.1),
+        ("max_risk_count", 11),
+    ],
+)
+def test_proposed_values_outside_bounds_exit_nonzero(
+    tmp_path: Path,
+    field_name: str,
+    bad_value: int | float,
+) -> None:
+    proposed = {"min_score": 55, "min_reversal": 12, "min_volume_ratio": 0.8, "max_risk_count": 3}
+    proposed[field_name] = bad_value
+    proposal = _make_proposal(tmp_path, proposed=proposed)
+
+    result = _run_script(proposal)
+
+    assert result.returncode != 0
+    assert f"proposed.{field_name}" in result.stderr
+    assert "must be between" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("min_score", float("inf")),
+        ("min_reversal", float("nan")),
+        ("min_volume_ratio", float("nan")),
+        ("max_risk_count", float("inf")),
+    ],
+)
+def test_non_finite_proposed_values_exit_nonzero(
+    tmp_path: Path,
+    field_name: str,
+    bad_value: float,
+) -> None:
+    proposed = {"min_score": 55, "min_reversal": 12, "min_volume_ratio": 0.8, "max_risk_count": 3}
+    proposed[field_name] = bad_value
+    proposal = _make_proposal(tmp_path, proposed=proposed)
+
+    result = _run_script(proposal)
+
+    assert result.returncode != 0
+    assert f"proposed.{field_name}" in result.stderr
+    assert "finite" in result.stderr
+
+
+def test_fractional_integer_proposed_value_exits_nonzero(tmp_path: Path) -> None:
+    proposed = {"min_score": 55.5, "min_reversal": 12, "min_volume_ratio": 0.8, "max_risk_count": 3}
+    proposal = _make_proposal(tmp_path, proposed=proposed)
+
+    result = _run_script(proposal)
+
+    assert result.returncode != 0
+    assert "proposed.min_score" in result.stderr
+    assert "finite integer" in result.stderr
+
+
+def test_boolean_float_proposed_value_exits_nonzero(tmp_path: Path) -> None:
+    proposed = {"min_score": 55, "min_reversal": 12, "min_volume_ratio": True, "max_risk_count": 3}
+    proposal = _make_proposal(tmp_path, proposed=proposed)
+
+    result = _run_script(proposal)
+
+    assert result.returncode != 0
+    assert "proposed.min_volume_ratio" in result.stderr
+    assert "finite number" in result.stderr
+
+
+def test_valid_proposed_bounds_are_preserved(tmp_path: Path) -> None:
+    proposed = {"min_score": 0, "min_reversal": 35, "min_volume_ratio": 5.0, "max_risk_count": 10}
+    proposal = _make_proposal(tmp_path, proposed=proposed)
+
+    result = _run_script(proposal)
+
+    assert result.returncode == 0
+    assert "min_score" in result.stdout
+    assert "min_reversal" in result.stdout
+    assert "min_volume_ratio" in result.stdout
+    assert "max_risk_count" in result.stdout
+
+
 # --- missing file ---
 
 def test_missing_proposal_file_exits_nonzero(tmp_path: Path) -> None:

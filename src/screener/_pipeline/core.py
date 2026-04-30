@@ -212,7 +212,7 @@ class ScreenPipeline:
         try:
             latest_dir = output_dir.parent / "latest"
             state_path = output_dir.parent / "alerts" / result.metadata.run_date.isoformat() / "alert-state.json"
-            state = load_alert_state(state_path)
+            state = load_alert_state(state_path, expected_run_date=result.metadata.run_date.isoformat())
             document, next_state = build_daily_alert_document(
                 result,
                 state=state,

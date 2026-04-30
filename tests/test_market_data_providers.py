@@ -118,6 +118,43 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(result.bars_by_ticker["AAPL"][0].trading_date.isoformat(), "2026-04-20")
         self.assertEqual(result.bars_by_ticker["AAPL"][-1].close, 192.5)
 
+    def test_twelve_data_fetcher_allows_default_and_public_https_base_urls(self):
+        default_fetcher = TwelveDataDailyBarFetcher(api_key="secret")
+        self.assertEqual(default_fetcher.base_url, "https://api.twelvedata.com/time_series")
+
+        custom_fetcher = TwelveDataDailyBarFetcher(
+            api_key="secret",
+            base_url="https://data.example.com/time_series",
+        )
+        self.assertEqual(custom_fetcher.base_url, "https://data.example.com/time_series")
+
+    def test_twelve_data_fetcher_rejects_unsafe_base_urls(self):
+        unsafe_urls = [
+            "file:///tmp/time_series",
+            "https:///time_series",
+            "https://user:pass@api.twelvedata.com/time_series",
+            "https://localhost/time_series",
+            "https://127.0.0.1/time_series",
+            "https://10.0.0.5/time_series",
+            "https://172.16.0.5/time_series",
+            "https://192.168.1.10/time_series",
+            "https://169.254.10.20/time_series",
+            "https://[::1]/time_series",
+        ]
+
+        for base_url in unsafe_urls:
+            with self.subTest(base_url=base_url):
+                with self.assertRaises(MarketDataProviderError):
+                    TwelveDataDailyBarFetcher(api_key="secret", base_url=base_url)
+
+    def test_build_market_data_fetcher_rejects_unsafe_twelve_data_base_url(self):
+        with self.assertRaises(MarketDataProviderError):
+            build_market_data_fetcher(
+                "twelve-data",
+                twelve_data_api_key="secret",
+                twelve_data_base_url="https://127.0.0.1/time_series",
+            )
+
     def test_twelve_data_fetcher_collects_provider_errors_per_ticker(self):
         def reader(url: str) -> str:
             if "symbol=BAD" in url:

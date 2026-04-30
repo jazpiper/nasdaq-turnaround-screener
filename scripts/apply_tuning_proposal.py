@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import subprocess
 import sys
@@ -26,6 +27,13 @@ _CONSTANT_PATTERNS: list[tuple[str, str, str]] = [
     ("min_volume_ratio", r"^BUY_REVIEW_MIN_VOLUME_RATIO = \S+", "BUY_REVIEW_MIN_VOLUME_RATIO = {value}"),
     ("max_risk_count",   r"^BUY_REVIEW_MAX_RISK_COUNT = \S+",   "BUY_REVIEW_MAX_RISK_COUNT = {value}"),
 ]
+
+_PROPOSED_BOUNDS: dict[str, tuple[float, float]] = {
+    "min_score": (0, 100),
+    "min_reversal": (0, 35),
+    "min_volume_ratio": (0.0, 5.0),
+    "max_risk_count": (0, 10),
+}
 
 
 def project_root() -> Path:
@@ -50,12 +58,56 @@ def load_proposal(path: Path) -> dict:
 
 def parse_proposed(payload: dict) -> dict[str, int | float]:
     proposed = payload["proposed"]
-    return {
-        "min_score":        int(proposed["min_score"]),
-        "min_reversal":     int(proposed["min_reversal"]),
-        "min_volume_ratio": float(proposed["min_volume_ratio"]),
-        "max_risk_count":   int(proposed["max_risk_count"]),
+    parsed = {
+        "min_score":        _parse_int_field(proposed, "min_score"),
+        "min_reversal":     _parse_int_field(proposed, "min_reversal"),
+        "min_volume_ratio": _parse_float_field(proposed, "min_volume_ratio"),
+        "max_risk_count":   _parse_int_field(proposed, "max_risk_count"),
     }
+    for field_name, value in parsed.items():
+        _validate_bounds(field_name, value)
+    return parsed
+
+
+def _parse_int_field(proposed: dict, field_name: str) -> int:
+    try:
+        raw_value = proposed[field_name]
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(f"ERROR: proposed.{field_name} must be a finite integer.") from exc
+    if isinstance(raw_value, bool):
+        raise SystemExit(f"ERROR: proposed.{field_name} must be a finite integer.")
+    if isinstance(raw_value, float):
+        if not math.isfinite(raw_value) or not raw_value.is_integer():
+            raise SystemExit(f"ERROR: proposed.{field_name} must be a finite integer.")
+        return int(raw_value)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(f"ERROR: proposed.{field_name} must be a finite integer.") from exc
+
+
+def _parse_float_field(proposed: dict, field_name: str) -> float:
+    try:
+        raw_value = proposed[field_name]
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(f"ERROR: proposed.{field_name} must be a finite number.") from exc
+    if isinstance(raw_value, bool):
+        raise SystemExit(f"ERROR: proposed.{field_name} must be a finite number.")
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise SystemExit(f"ERROR: proposed.{field_name} must be a finite number.") from exc
+
+
+def _validate_bounds(field_name: str, value: int | float) -> None:
+    minimum, maximum = _PROPOSED_BOUNDS[field_name]
+    if not math.isfinite(float(value)):
+        raise SystemExit(f"ERROR: proposed.{field_name} must be finite.")
+    if not minimum <= value <= maximum:
+        raise SystemExit(
+            f"ERROR: proposed.{field_name} must be between {minimum:g} and {maximum:g}; "
+            f"got {value!r}."
+        )
 
 
 def parse_current_from_file(tiering_path: Path) -> dict[str, int | float]:

@@ -80,6 +80,51 @@ def test_load_alert_state_handles_sparse_older_payload(tmp_path: Path) -> None:
     assert state.tickers["AAPL"].last_volatility_penalty is None
 
 
+def test_load_alert_state_returns_empty_when_run_date_mismatches(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        """
+        {
+          "run_date": "2026-04-20",
+          "tickers": {
+            "AAPL": {
+              "last_delivery_tier": "single",
+              "last_material_signature": "stale"
+            }
+          }
+        }
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_alert_state(state_path, expected_run_date="2026-04-21")
+
+    assert state == AlertState()
+
+
+def test_load_alert_state_accepts_older_state_without_run_date(tmp_path: Path) -> None:
+    state_path = tmp_path / "alert-state.json"
+    state_path.write_text(
+        """
+        {
+          "tickers": {
+            "AAPL": {
+              "last_delivery_tier": "single",
+              "last_material_signature": "legacy"
+            }
+          }
+        }
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_alert_state(state_path, expected_run_date="2026-04-21")
+
+    assert state.tickers["AAPL"].last_material_signature == "legacy"
+
+
 def test_write_json_atomic_replaces_existing_payload(tmp_path: Path) -> None:
     payload_path = tmp_path / "payload.json"
     payload_path.write_text("{\"old\": true}\n", encoding="utf-8")
