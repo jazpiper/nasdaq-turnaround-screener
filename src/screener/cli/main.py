@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -11,9 +12,17 @@ from screener.collector import CollectionResult, TwelveDataWindowCollector
 from screener.config import Settings, get_settings
 from screener.models import ScreenRunResult
 from screener.pipeline import ScreenPipeline, build_context
+from screener.reporting.assistant_briefing import (
+    build_assistant_briefing_markdown,
+    build_assistant_briefing_payload,
+    load_daily_report,
+    parse_user_tickers,
+    write_assistant_briefing,
+)
 from screener.storage import OracleSqlStorage, OracleSqlStorageError
 from screener.storage.files import ensure_directory
 from screener.tuning import TierThresholdsGrid, tune_single_window, walk_forward
+from screener.universe import USER_WATCHLIST_UNIVERSE_NAME, parse_ticker_list
 from screener.tuning.report import (
     write_diff_markdown,
     write_diff_markdown_from_walkforward,
@@ -64,8 +73,21 @@ def run(
     use_staged_intraday: bool = typer.Option(False, "--use-staged-intraday", help="Prefer latest staged intraday quotes from output/intraday for same-day enrichment when available."),
     intraday_output_root: Path | None = typer.Option(None, "--intraday-output-root", help="Override staged intraday artifact root used with --use-staged-intraday."),
     persist_oracle_sql: bool = typer.Option(False, "--persist-oracle-sql", help="Write successful run results to Oracle SQL."),
+    universe_name: str | None = typer.Option(None, "--universe-name", help="Name to record for a custom ticker universe. Defaults to user-watchlist when --tickers is provided."),
+    universe_tickers: str | None = typer.Option(None, "--tickers", "--universe-tickers", help="Comma-separated tickers for a custom screener universe."),
 ) -> None:
     settings = get_settings(output_dir=output_dir)
+    if universe_tickers is not None:
+        try:
+            settings.universe_tickers = parse_ticker_list(universe_tickers)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--tickers") from exc
+        settings.universe_name = (universe_name or USER_WATCHLIST_UNIVERSE_NAME).strip() or USER_WATCHLIST_UNIVERSE_NAME
+    elif universe_name is not None:
+        raise typer.BadParameter(
+            "--universe-name requires --tickers/--universe-tickers.",
+            param_hint="--universe-name",
+        )
     if use_staged_intraday:
         settings.daily_intraday_source_mode = "prefer-staged"
     if intraday_output_root is not None:
@@ -80,6 +102,7 @@ def run(
         raise typer.Exit(code=1) from exc
 
     typer.echo(f"Run date: {result.metadata.run_date.isoformat()}")
+    typer.echo(f"Run universe: {result.metadata.universe}")
     typer.echo(f"Dry run: {result.metadata.dry_run}")
     typer.echo(f"Candidate count: {result.candidate_count}")
     typer.echo(
@@ -154,6 +177,76 @@ def collect_window(
         typer.echo(f"Stable provisional alert entrypoint: {result.artifacts.stable_alert_events_path}")
     if collection_run_id is not None:
         typer.echo(f"Oracle SQL collection id: {collection_run_id}")
+
+
+@app.command("build-assistant-briefing")
+def build_assistant_briefing(
+    report_path: Path = typer.Option(
+        Path("output/daily/latest/daily-report.json"),
+        "--report-path",
+        help="Source daily-report.json path.",
+    ),
+    output_dir: Path = typer.Option(
+        Path("output/assistant"),
+        "--output-dir",
+        help="Directory for compact assistant briefing artifacts.",
+    ),
+    user_tickers: str = typer.Option(
+        "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA",
+        "--user-tickers",
+        help="Comma-separated user holdings/watchlist tickers to summarize.",
+    ),
+    top_candidates: int = typer.Option(
+        10,
+        "--top-candidates",
+        min=0,
+        help="Number of top screener candidates to include.",
+    ),
+    artifact_basename: str | None = typer.Option(
+        None,
+        "--artifact-basename",
+        help="Optional basename for output artifacts; writes <basename>.json and <basename>.md.",
+    ),
+    dry_run: bool = typer.Option(False, help="Build the briefing without writing artifacts."),
+) -> None:
+    try:
+        daily_report = load_daily_report(report_path)
+    except FileNotFoundError as exc:
+        typer.echo(f"Daily report not found: {report_path}", err=True)
+        raise typer.Exit(code=1) from exc
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Daily report is not valid JSON: {report_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        typer.echo(f"Daily report could not be read: {report_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = build_assistant_briefing_payload(
+        daily_report,
+        user_tickers=parse_user_tickers(user_tickers),
+        top_candidate_count=top_candidates,
+        source_report_path=report_path,
+    )
+    markdown = build_assistant_briefing_markdown(payload)
+
+    typer.echo(f"Source daily report: {report_path}")
+    typer.echo(f"User tickers: {', '.join(item['ticker'] for item in payload['user_tickers'])}")
+    typer.echo(f"Top candidates included: {len(payload['top_candidates'])}")
+    if dry_run:
+        typer.echo("Artifacts skipped (--dry-run).")
+        return
+
+    try:
+        json_path, markdown_path = write_assistant_briefing(
+            payload,
+            markdown,
+            output_dir,
+            artifact_basename=artifact_basename,
+        )
+    except ValueError as exc:
+        typer.echo(f"Invalid artifact basename: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    typer.echo(f"Assistant briefing JSON: {json_path}")
+    typer.echo(f"Assistant briefing markdown: {markdown_path}")
 
 
 @app.command("init-oracle-schema")

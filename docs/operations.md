@@ -17,21 +17,49 @@ uv run pytest
 uv run python -m screener.cli.main run --date 2026-04-21
 uv run python -m screener.cli.main run --date 2026-04-21 --use-staged-intraday
 uv run python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
+uv run python -m screener.cli.main run --date 2026-05-01 --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 
 uv run python scripts/run_daily.py --date 2026-04-21 --skip-install
 uv run python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --skip-install
+uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --universe-name user-watchlist --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 ```
 
 daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-MM-DD/` 출력, `output/daily/latest` 갱신까지 처리합니다.
 `--date` 는 **America/New_York 거래일 기준**으로 넣는 것을 전제로 합니다. 스케줄러가 UTC/KST에서 돈다면 당일 로컬 날짜를 그대로 쓰지 말고 NY trading day를 명시적으로 넘기는 편이 안전합니다.
-- `run` CLI는 stdout에 `Data quality: nonempty=..., latest_date_mismatch=..., insufficient_history=...` 요약을 함께 출력합니다.
+- `run` CLI는 stdout에 `Run universe: ...` 및 `Data quality: nonempty=..., latest_date_mismatch=..., insufficient_history=...` 요약을 함께 출력합니다.
+- `--tickers`/`--universe-tickers`를 명시하면 custom universe가 활성화되고 기본 이름은 `user-watchlist` 입니다. `--universe-name`으로 artifact metadata의 universe 이름을 바꿀 수 있으며, 이 옵션은 custom ticker list와 함께만 허용됩니다.
+- ticker list는 comma-separated 입력을 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 옵션을 주지 않으면 기존 NASDAQ-100 기본 동작과 output schema가 유지됩니다.
+- `scripts/run_daily.py`는 custom tickers와 기본 `--output-root` 생략 조합에서 root를 `output/daily-user-watchlist`처럼 universe별로 분리해 `output/daily/latest`와 alert-state 간섭을 피합니다. 명시적으로 같은 `--output-root`를 주면 그 값을 따릅니다.
+- raw `screener run --tickers ... --output-dir ...`는 latest pointer를 갱신하지 않으므로, cron 소비 경로와 분리된 output dir을 직접 지정하는 편이 안전합니다.
 - `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers` 가 함께 기록됩니다.
 - daily run은 `daily-report.json` 옆에 `alert-events.json` 도 함께 생성합니다.
 - OpenClaw는 daily consumer entrypoint로 `output/daily/latest/alert-events.json` 을 읽으면 됩니다.
 - earnings calendar 또는 benchmark context fetch가 실패하면 run은 계속 진행하고, 사유는 `run-metadata.json` / `daily-report.json` 의 `notes` 에 남깁니다.
 - 운영 모니터링에서는 `latest_bar_date_mismatch_count` 증가를 stale bar 징후로, `insufficient_history_count` 증가를 provider coverage 문제 징후로 먼저 보는 편이 안전합니다.
 
-## 3. Intraday Collection
+## 3. Assistant Briefing Artifacts
+```bash
+uv run python -m screener.cli.main build-assistant-briefing
+uv run python -m screener.cli.main build-assistant-briefing \
+  --report-path output/daily/latest/daily-report.json \
+  --output-dir output/assistant \
+  --user-tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA \
+  --top-candidates 10
+uv run python -m screener.cli.main build-assistant-briefing \
+  --report-path output/daily/latest/daily-report.json \
+  --output-dir output/assistant \
+  --artifact-basename latest-user-watchlist-screener
+```
+
+- 기본 입력은 `output/daily/latest/daily-report.json` 입니다.
+- 기본 출력은 `output/assistant/latest-user-briefing-screener.json` 와 `output/assistant/latest-user-briefing-screener.md` 입니다.
+- `--artifact-basename latest-user-watchlist-screener`를 주면 기본 artifact를 덮어쓰지 않고 `latest-user-watchlist-screener.json` / `.md`를 씁니다.
+- custom watchlist daily report에서 planned ticker가 data provider 실패(`data_failures`)로 빠진 경우, assistant briefing은 해당 ticker를 outside-universe가 아니라 `data_failure`로 표시합니다.
+- 이 compact artifact는 personal assistant가 daily report 전체 schema를 직접 해석하지 않고 user tickers, missing/outside-universe tickers, top candidates, data-quality summary만 읽도록 만든 안정 진입점입니다.
+- `--dry-run` 은 source report를 읽고 briefing을 구성하지만 artifact를 쓰지 않습니다.
+- 모든 신호는 technical/research 기반 decision-support 용도이며 buy/sell advice가 아닙니다.
+
+## 4. Intraday Collection
 ```bash
 # raw CLI 기본값: 6분할 계획 중 1개 window, 8 credits/min
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
@@ -55,7 +83,7 @@ uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-
 - OpenClaw는 intraday consumer entrypoint로 `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽으면 됩니다.
 - `collect-window` CLI stdout은 `Failures` 만 바로 보여주므로, 일일 크레딧 소진으로 인한 미시도 ticker 수는 `collection-metadata.json` 의 `skipped_due_to_credit_exhaustion_count` 로 확인하는 편이 정확합니다.
 
-## 4. Backtest
+## 5. Backtest
 ```bash
 uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
 uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21 --horizons 5,10,20
@@ -65,7 +93,7 @@ uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2
 - artifact는 기본적으로 `output/backtests/` 아래에 생성됩니다.
 - `generate_observations()` 가 분리되어 있어 tuning 루프가 동일 관찰치를 재활용합니다.
 
-## 5. Threshold Tuning (Walk-Forward)
+## 6. Threshold Tuning (Walk-Forward)
 
 ### 튜닝 실행
 ```bash
@@ -108,7 +136,7 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 
 주의: 자동 적용 없음. 사람이 `tuning-diff.md` 를 검토하고 `--write` 를 명시적으로 실행해야 합니다.
 
-## 6. Environment and Secrets
+## 7. Environment and Secrets
 - `SCREENER_MARKET_DATA_PROVIDER`: daily provider override (`yfinance`, `twelve-data`)
 - `TWELVE_DATA_API_KEY`: Twelve Data API key
 - `TWELVE_DATA_BASE_URL`: Twelve Data endpoint override. API key가 query string으로 붙으므로 public routable `http(s)` endpoint만 허용되며, localhost/private IP/userinfo URL은 거부됩니다.
@@ -123,7 +151,7 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 
 환경변수가 없으면 기본적으로 `~/.openclaw/secrets.json` 에서 provider / Oracle credential을 읽습니다.
 
-## 7. Oracle SQL Notes
+## 8. Oracle SQL Notes
 ```bash
 uv run python -m screener.cli.main init-oracle-schema
 ```
@@ -133,7 +161,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - `risk_adjusted_score` 같은 새 저장 컬럼이 추가된 배포 후에는 기존 DB에도 같은 명령을 다시 1회 실행해 additive migration을 적용해야 합니다.
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
-## 8. OpenClaw Usage
+## 9. OpenClaw Usage
 - 이 저장소는 cron 정의를 포함하지 않습니다. OpenClaw가 외부에서 명령을 호출하는 전제를 둡니다.
 - 장중 수집은 `uv run python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
 - 장 마감 후 daily run은 `uv run python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
@@ -145,7 +173,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - same-day staged merge는 intraday metadata 전체를 읽는 것이 아니라, 각 run의 `completed_at` 또는 `started_at` 으로 최신 snapshot을 고른 뒤 `collected-quotes.json` 을 사용합니다.
 - 운영에서는 `output/daily`, `output/intraday`, `output/alerts` 를 screener producer 계정만 쓸 수 있게 두는 것을 권장합니다. consumer는 stable sidecar를 읽기만 하고 내부 artifact/state를 수정하지 않아야 합니다.
 
-## 9. OpenClaw Command Template
+## 10. OpenClaw Command Template
 `SCREENER_INTRADAY_COLLECTOR_COMMAND` 를 쓰면 wrapper가 아래 placeholder를 치환합니다.
 
 - `{python}`
@@ -165,7 +193,7 @@ env PYTHONPATH={project_root}/src {python} -m screener.cli.main collect-window -
 - `env PYTHONPATH={project_root}/src ...` prefix는 cron/OpenClaw 환경에서 `src/` import가 누락되지 않게 하려는 의도입니다.
 - `window_id` 는 스케줄 slot 라벨 검증용이고, 기본 template는 의도적으로 `window-index 0`, `total-windows 1` 로 전체 유니버스를 다시 수집합니다.
 
-## 10. Exit and Failure Handling
+## 11. Exit and Failure Handling
 - 일부 ticker fetch 실패는 metadata에 남기고 run 전체는 계속 진행합니다.
 - Twelve Data가 일일 크레딧 소진(`run out of API credits for the day` 류) 응답을 주면, 해당 slot의 추가 ticker 호출을 즉시 중단하고 이후 planned ticker는 미시도 상태로 metadata에 남깁니다.
 - metadata에서는 실제 호출 후 실패한 ticker는 `failures` 에 남기고, 아직 호출하지 못한 ticker는 `skipped_due_to_credit_exhaustion` 으로 별도 분리합니다.

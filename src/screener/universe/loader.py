@@ -6,6 +6,7 @@ from typing import Iterable
 from .nasdaq100 import NASDAQ_100_TICKERS
 
 DEFAULT_UNIVERSE_NAME = "NASDAQ-100"
+USER_WATCHLIST_UNIVERSE_NAME = "user-watchlist"
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,23 @@ def normalize_ticker(ticker: str) -> str:
     if not normalized:
         raise ValueError("Ticker cannot be blank")
     return normalized.replace(".", "-")
+
+
+def parse_ticker_list(value: str) -> tuple[str, ...]:
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for part in value.split(","):
+        try:
+            ticker = normalize_ticker(part)
+        except ValueError:
+            continue
+        if ticker in seen:
+            continue
+        tickers.append(ticker)
+        seen.add(ticker)
+    if not tickers:
+        raise ValueError("At least one ticker is required")
+    return tuple(tickers)
 
 
 def load_static_universe(

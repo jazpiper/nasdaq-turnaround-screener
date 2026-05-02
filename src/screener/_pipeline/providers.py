@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -22,8 +22,11 @@ from .context import _close_improvement_streak, _latest_change, _percent_return
 
 
 class StaticUniverseProvider:
+    def __init__(self, tickers: Iterable[str] | None = None) -> None:
+        self._tickers = tuple(tickers) if tickers is not None else None
+
     def load_universe(self, context: PipelineContext) -> list[TickerInput]:
-        definition = load_static_universe(name=context.universe_name)
+        definition = load_static_universe(tickers=self._tickers, name=context.universe_name)
         return [
             TickerInput(ticker=ticker, name=NASDAQ_100_COMPANY_NAMES.get(ticker))
             for ticker in definition.tickers

@@ -15,10 +15,15 @@ runner = CliRunner()
 
 
 class StubPipeline:
+    last_settings = None
+    last_context = None
+
     def __init__(self, settings):
         self.settings = settings
+        StubPipeline.last_settings = settings
 
     def run(self, context):
+        StubPipeline.last_context = context
         result = ScreenRunResult(
             metadata=RunMetadata(
                 run_date=context.run_date,
@@ -111,6 +116,86 @@ def test_run_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> None:
     assert "Candidate count: 1" in result.stdout
     assert "Artifacts skipped" in result.stdout
     assert not any(tmp_path.iterdir())
+    assert StubPipeline.last_settings.universe_tickers is None
+    assert StubPipeline.last_context.universe_name == "NASDAQ-100"
+
+
+def test_run_passes_custom_watchlist_universe_to_pipeline(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", StubPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--date",
+            "2026-05-01",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--tickers",
+            "tsla, INFQ,pltr,tsla,rklb,googl,nvda",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert StubPipeline.last_settings.universe_name == "user-watchlist"
+    assert StubPipeline.last_settings.universe_tickers == (
+        "TSLA",
+        "INFQ",
+        "PLTR",
+        "RKLB",
+        "GOOGL",
+        "NVDA",
+    )
+    assert StubPipeline.last_context.universe_name == "user-watchlist"
+    assert "Run universe: user-watchlist" in result.stdout
+
+
+def test_run_allows_explicit_custom_universe_name(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", StubPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--date",
+            "2026-05-01",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--universe-name",
+            "personal-watchlist",
+            "--universe-tickers",
+            "TSLA,NVDA",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert StubPipeline.last_settings.universe_name == "personal-watchlist"
+    assert StubPipeline.last_settings.universe_tickers == ("TSLA", "NVDA")
+    assert StubPipeline.last_context.universe_name == "personal-watchlist"
+
+
+def test_run_rejects_universe_name_without_custom_tickers(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", StubPipeline)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--date",
+            "2026-05-01",
+            "--dry-run",
+            "--output-dir",
+            str(tmp_path),
+            "--universe-name",
+            "personal-watchlist",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid value for --universe-name" in result.output
+    assert "--tickers/--universe-tickers" in result.output
 
 
 class StubOracleSqlStorage:
@@ -399,6 +484,157 @@ def test_openclaw_docs_do_not_pass_unsupported_flags_to_commands() -> None:
                 assert "--dry-run" not in line, f"{doc_path} passes unsupported --dry-run to tune"
         assert "apply_tuning_proposal.py --dry-run" not in content, f"{doc_path} advertises unsupported apply --dry-run"
 
+
+def test_build_assistant_briefing_writes_compact_artifacts(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-05-01",
+                "planned_ticker_count": 100,
+                "successful_ticker_count": 100,
+                "failed_ticker_count": 0,
+                "bars_nonempty_count": 100,
+                "latest_bar_date_mismatch_count": 0,
+                "insufficient_history_count": 0,
+                "planned_tickers": ["TSLA", "PLTR", "GOOGL", "NVDA", "GEHC"],
+                "candidate_count": 1,
+                "candidates": [
+                    {
+                        "ticker": "GEHC",
+                        "name": "GE HealthCare Technologies Inc.",
+                        "score": 68,
+                        "risk_adjusted_score": 53,
+                        "tier": "avoid/high-risk",
+                        "reasons": ["BB 하단 근처 또는 재진입 구간"],
+                        "risks": ["주봉 추세가 아직 약함"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "assistant"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-assistant-briefing",
+            "--report-path",
+            str(report_path),
+            "--output-dir",
+            str(output_dir),
+            "--user-tickers",
+            "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA",
+            "--top-candidates",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Assistant briefing JSON:" in result.stdout
+    json_path = output_dir / "latest-user-briefing-screener.json"
+    markdown_path = output_dir / "latest-user-briefing-screener.md"
+    assert json_path.exists()
+    assert markdown_path.exists()
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    user_by_ticker = {item["ticker"]: item for item in payload["user_tickers"]}
+    assert user_by_ticker["TSLA"]["in_screener_universe"] is True
+    assert user_by_ticker["RKLB"]["in_screener_universe"] is False
+    assert payload["top_candidates"][0]["ticker"] == "GEHC"
+
+
+def test_build_assistant_briefing_writes_user_watchlist_artifact_names(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-05-01",
+                "universe": "user-watchlist",
+                "planned_ticker_count": 6,
+                "successful_ticker_count": 5,
+                "failed_ticker_count": 1,
+                "bars_nonempty_count": 5,
+                "latest_bar_date_mismatch_count": 0,
+                "insufficient_history_count": 0,
+                "planned_tickers": ["TSLA", "INFQ", "PLTR", "RKLB", "GOOGL", "NVDA"],
+                "data_failures": ["INFQ: No price rows returned"],
+                "candidate_count": 0,
+                "candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "assistant"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-assistant-briefing",
+            "--report-path",
+            str(report_path),
+            "--output-dir",
+            str(output_dir),
+            "--artifact-basename",
+            "latest-user-watchlist-screener",
+        ],
+    )
+
+    assert result.exit_code == 0
+    json_path = output_dir / "latest-user-watchlist-screener.json"
+    markdown_path = output_dir / "latest-user-watchlist-screener.md"
+    assert json_path.exists()
+    assert markdown_path.exists()
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    user_by_ticker = {item["ticker"]: item for item in payload["user_tickers"]}
+    assert payload["universe"] == "user-watchlist"
+    assert payload["missing_user_tickers"] == []
+    assert user_by_ticker["INFQ"]["in_screener_universe"] is True
+    assert user_by_ticker["INFQ"]["data_failure"] is True
+    assert user_by_ticker["INFQ"]["data_failure_reason"] == "No price rows returned"
+
+
+def test_build_assistant_briefing_dry_run_skips_artifacts(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    report_path.write_text(
+        json.dumps({"date": "2026-05-01", "planned_tickers": [], "candidate_count": 0, "candidates": []}),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "assistant"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-assistant-briefing",
+            "--report-path",
+            str(report_path),
+            "--output-dir",
+            str(output_dir),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Artifacts skipped" in result.stdout
+    assert not output_dir.exists()
+
+
+def test_build_assistant_briefing_missing_report_exits_cleanly(tmp_path: Path) -> None:
+    missing_report = tmp_path / "missing-daily-report.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "build-assistant-briefing",
+            "--report-path",
+            str(missing_report),
+            "--output-dir",
+            str(tmp_path / "assistant"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Daily report not found:" in (result.stdout + result.stderr)
 
 
 def test_collect_window_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> None:

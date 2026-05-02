@@ -116,6 +116,104 @@ def test_static_universe_provider_loads_real_universe() -> None:
     assert tickers[0].ticker
 
 
+def test_static_universe_provider_loads_custom_watchlist() -> None:
+    context = build_context(
+        run_date=date(2026, 5, 1),
+        dry_run=True,
+        universe_name="user-watchlist",
+    )
+
+    tickers = StaticUniverseProvider(
+        tickers=("tsla", "INFQ", "pltr", "tsla", "rklb", "googl", "nvda")
+    ).load_universe(context)
+
+    assert [item.ticker for item in tickers] == [
+        "TSLA",
+        "INFQ",
+        "PLTR",
+        "RKLB",
+        "GOOGL",
+        "NVDA",
+    ]
+    assert tickers[0].name == "Tesla, Inc."
+    assert tickers[1].name is None
+
+
+class _NoCandidateScorer:
+    def evaluate(self, ticker, indicators, context):
+        return None
+
+
+class _NoOpIndicatorEngine:
+    def compute(self, history, ticker, context):
+        return {"ticker": ticker.ticker}
+
+
+class _CustomUniverseMarketDataProvider:
+    def __init__(self) -> None:
+        self.prepared_tickers: list[str] = []
+        self.failures = {"INFQ": "No price rows returned"}
+
+    def prepare(self, tickers, context) -> None:
+        self.prepared_tickers = [ticker.ticker for ticker in tickers]
+
+    def fetch_history(self, ticker, context):
+        rows = [
+            {
+                "date": context.run_date - timedelta(days=day),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "adj_close": 100.0,
+                "volume": 1_500_000.0,
+            }
+            for day in range(60)
+        ]
+        return pd.DataFrame(rows)
+
+
+class _UnavailableBenchmarkProvider:
+    def fetch_history(self, ticker, context):
+        raise RuntimeError("benchmark unavailable in test")
+
+
+def test_pipeline_uses_settings_custom_watchlist_without_live_provider(tmp_path: Path) -> None:
+    provider = _CustomUniverseMarketDataProvider()
+    settings = Settings(
+        output_dir=tmp_path,
+        universe_name="user-watchlist",
+        universe_tickers=("TSLA", "INFQ", "PLTR", "RKLB", "GOOGL", "NVDA"),
+    )
+    pipeline = ScreenPipeline(
+        settings=settings,
+        market_data_provider=provider,
+        indicator_engine=_NoOpIndicatorEngine(),
+        candidate_scorer=_NoCandidateScorer(),
+        earnings_calendar_provider=None,
+        benchmark_market_data_provider=_UnavailableBenchmarkProvider(),
+    )
+    context = build_context(
+        run_date=date(2026, 5, 1),
+        generated_at=datetime(2026, 5, 1, 20, 0, tzinfo=timezone.utc),
+        dry_run=True,
+        output_dir=tmp_path,
+        universe_name=settings.universe_name,
+    )
+
+    result, artifacts = pipeline.run(context)
+
+    assert provider.prepared_tickers == ["TSLA", "INFQ", "PLTR", "RKLB", "GOOGL", "NVDA"]
+    assert result.metadata.universe == "user-watchlist"
+    assert result.metadata.planned_ticker_count == 6
+    assert result.metadata.successful_ticker_count == 5
+    assert result.metadata.failed_ticker_count == 1
+    assert result.metadata.planned_tickers == ["TSLA", "INFQ", "PLTR", "RKLB", "GOOGL", "NVDA"]
+    assert result.metadata.data_failures == ["INFQ: No price rows returned"]
+    assert artifacts.markdown_path is None
+    assert not tmp_path.exists() or not any(tmp_path.iterdir())
+
+
 def test_pipeline_runs_end_to_end_and_records_failures(tmp_path: Path) -> None:
     histories = {
         "AAPL": make_bars_from_history("AAPL", make_history(start_close=180.0)),
