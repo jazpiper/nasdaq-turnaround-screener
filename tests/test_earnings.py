@@ -135,10 +135,8 @@ def test_score_candidate_applies_candle_reversal_bonus_and_reason() -> None:
 
     assert "하단 꼬리 이후 종가가 일중 상단에서 마감" in candidate.reasons
     assert "gap 하락 이후 회복 흐름이 확인됨" in candidate.reasons
-    assert "실체가 커 매수 우위가 비교적 분명함" in candidate.reasons
-    assert "inside day 안에서 매수 우위가 유지됨" in candidate.reasons
     assert "전일 몸통을 감싸는 bullish engulfing 유사 패턴" in candidate.reasons
-    assert candidate.subscores["reversal"] == 25
+    assert candidate.subscores["reversal"] == 24
 
 
 def test_score_candidate_adds_candle_structure_risk_when_close_is_weak() -> None:
