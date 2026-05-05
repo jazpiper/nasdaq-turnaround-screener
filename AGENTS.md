@@ -28,6 +28,7 @@
 - Prefer stubs and `monkeypatch` over live API or Oracle dependencies. Cover artifact paths, CLI output, and persistence toggles.
 
 ## Operational Notes
+- Keep this file concise because it is injected into agent context for this workdir. Put long runbooks/design notes in `docs/` and link them instead of expanding `AGENTS.md`.
 - Treat `--date` values as `America/New_York` trading dates, especially when running from UTC or KST schedulers.
 - `scripts/run_daily.py` is the normal daily operational entrypoint because it updates `output/daily/latest` after the dated run completes.
 - OpenClaw-style consumers read stable alert entrypoints such as `output/daily/latest/alert-events.json` and `output/intraday/<NY_DATE>/latest-alert-events.json`; regenerate these artifacts through the runners instead of editing them manually.
