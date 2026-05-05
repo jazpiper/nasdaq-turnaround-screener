@@ -18,7 +18,7 @@ uv run pytest
 uv run python -m screener.cli.main run --date 2026-04-21 --dry-run
 ```
 
-- `--date` 는 `America/New_York` 거래일 기준으로 넘기는 전제를 둡니다.
+- `--date` 는 `America/New_York` 거래일 기준입니다. 운영 wrapper(`scripts/run_daily.py`, `scripts/run_intraday_window.py`)는 `--date`를 생략하거나 `--date auto`/`--date ny-today`를 주면 현재 `America/New_York` 날짜를 사용합니다.
 - `uv.lock` is committed so local, cron, and CI-like runs resolve the same dependency set.
 
 ## Main Commands
@@ -29,6 +29,8 @@ uv run python -m screener.cli.main run --date 2026-04-21 --use-staged-intraday
 uv run python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 uv run python -m screener.cli.main run --date 2026-05-01 --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 uv run python -m screener.cli.main run --date 2026-05-01 --universe-name personal-watchlist --universe-tickers TSLA,NVDA
+uv run python scripts/run_daily.py --skip-install --persist-oracle-sql
+uv run python scripts/run_daily.py --date ny-today --skip-install --persist-oracle-sql
 uv run python scripts/run_daily.py --date 2026-04-21 --skip-install
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --universe-name user-watchlist --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 ```
@@ -49,6 +51,8 @@ Reads `output/daily/latest/daily-report.json` by default and writes compact assi
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --total-windows 1 --max-credits-per-minute 5
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --persist-oracle-sql
+uv run python scripts/run_intraday_window.py --skip-install --window-id open-1 --persist-oracle-sql
+uv run python scripts/run_intraday_window.py --date ny-today --window-id open-1 --skip-install --persist-oracle-sql
 uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
 ```
 

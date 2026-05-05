@@ -28,6 +28,13 @@ from screener.secrets import load_openclaw_secrets
 class MarketDataProviderTests(unittest.TestCase):
     def setUp(self):
         self._env_backup = os.environ.copy()
+        for key in (
+            "SCREENER_MARKET_DATA_PROVIDER",
+            "TWELVE_DATA_API_KEY",
+            "TWELVE_DATA_BASE_URL",
+            "SCREENER_OPENCLAW_SECRETS_PATH",
+        ):
+            os.environ.pop(key, None)
 
     def tearDown(self):
         os.environ.clear()

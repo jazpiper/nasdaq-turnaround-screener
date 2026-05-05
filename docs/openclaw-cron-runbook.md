@@ -21,7 +21,8 @@
 - project root: `/home/ubuntu/project/nasdaq-turnaround-screener`
 - 운영 기준 timezone: `America/New_York`
 - cron 등록도 가능하면 `CRON_TZ=America/New_York` 기준으로 잡는 것을 권장
-- `--date` 는 항상 NY trading day를 명시적으로 넘긴다.
+- producer command는 repo wrapper의 NY-date default를 사용한다. `--date` 를 생략하거나 `--date ny-today`/`--date auto` 를 쓰면 현재 `America/New_York` 날짜로 해석된다.
+- 명시적 `YYYY-MM-DD` 가 필요한 수동 재실행에서는 NY trading day를 그대로 넘긴다.
 - `OpenClaw` 가 거래일 계산이 가능하면 미국 휴장일 / 주말에는 실행을 생략하는 것이 가장 안전하다.
 - producer가 쓰는 `output/daily`, `output/intraday`, `output/alerts` 는 screener producer 계정만 write 가능하게 둔다. OpenClaw consumer는 stable sidecar를 read-only로 소비한다.
 
@@ -51,6 +52,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - `ORACLE_DB_USER`
 - `ORACLE_DB_PASSWORD`
 - `ORACLE_DB_CONNECT_STRING`
+- legacy aliases: `SCREENER_ORACLE_SQL_USER`, `SCREENER_ORACLE_SQL_PASSWORD`, `SCREENER_ORACLE_SQL_CONNECT_STRING` (`ORACLE_DB_*` wins if both are set)
 - `SCREENER_OPENCLAW_SECRETS_PATH` 또는 `OPENCLAW_SECRETS_PATH`
 
 참고:
@@ -75,13 +77,13 @@ producer는 screener를 실행해 raw artifact와 stable sidecar를 갱신합니
 권장 command:
 
 ```bash
-cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date <NY_DATE> --window-id <WINDOW_ID> --skip-install
+cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id <WINDOW_ID> --skip-install --persist-oracle-sql
 ```
 
 예:
 
 ```bash
-cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date 2026-04-22 --window-id open-1 --skip-install
+cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id open-1 --skip-install --persist-oracle-sql
 ```
 
 #### Daily Final Producer
@@ -90,19 +92,19 @@ cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_win
 권장 command:
 
 ```bash
-cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --date <NY_DATE> --use-staged-intraday --skip-install
+cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --use-staged-intraday --skip-install --persist-oracle-sql
 ```
 
 예:
 
 ```bash
-cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --date 2026-04-22 --use-staged-intraday --skip-install
+cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --use-staged-intraday --skip-install --persist-oracle-sql
 ```
 
 설명:
 - daily final은 same-day intraday snapshot을 반영하려면 `--use-staged-intraday` 를 쓰는 것을 권장
 - daily final artifact가 같은 날짜 provisional artifact보다 우선합니다.
-- Oracle SQL persistence를 켠 daily producer는 `risk_adjusted_score` 컬럼이 준비되어 있어야 insert가 성공합니다.
+- Oracle SQL persistence를 켠 producer는 collection 전에 credential/import/connectivity preflight를 먼저 수행합니다. credential 누락 시 secret 값을 출력하지 않고 즉시 non-zero exit합니다.
 
 ### Consumer Jobs
 consumer는 producer가 이미 만든 stable sidecar를 읽고, 새 dedupe key가 있을 때만 Telegram delivery를 수행합니다.
@@ -139,13 +141,13 @@ producer와 consumer를 분리한 예시입니다.
 CRON_TZ=America/New_York
 
 # producers
-40 9  * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date $(TZ=America/New_York date +\%F) --window-id open-1 --skip-install
-10 10 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date $(TZ=America/New_York date +\%F) --window-id open-2 --skip-install
-0  12 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date $(TZ=America/New_York date +\%F) --window-id midday-1 --skip-install
-0  13 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date $(TZ=America/New_York date +\%F) --window-id midday-2 --skip-install
-0  15 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date $(TZ=America/New_York date +\%F) --window-id power-hour-1 --skip-install
-0  16 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --date $(TZ=America/New_York date +\%F) --window-id power-hour-2 --skip-install
-30 16 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --date $(TZ=America/New_York date +\%F) --use-staged-intraday --skip-install
+40 9  * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id open-1 --skip-install --persist-oracle-sql
+10 10 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id open-2 --skip-install --persist-oracle-sql
+0  12 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id midday-1 --skip-install --persist-oracle-sql
+0  13 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id midday-2 --skip-install --persist-oracle-sql
+0  15 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id power-hour-1 --skip-install --persist-oracle-sql
+0  16 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_intraday_window.py --window-id power-hour-2 --skip-install --persist-oracle-sql
+30 16 * * 1-5 cd /home/ubuntu/project/nasdaq-turnaround-screener && ./scripts/run_daily.py --use-staged-intraday --skip-install --persist-oracle-sql
 
 # monthly threshold tuning — 매월 첫 월요일 17:30 ET (장 마감 후)
 # proposal JSON만 생성. tiering.py 반영은 사람이 검토 후 수동으로 수행.
@@ -183,16 +185,20 @@ CRON_TZ=America/New_York
 ### `run`
 - `Alert events: ...`
 - `Stable alert entrypoint: ...`
+- Oracle persistence 사용 시 `Oracle SQL run id: ...`
 
 ### `collect-window`
 - `Provisional alert events: ...`
 - `Stable provisional alert entrypoint: ...`
+- Oracle persistence 사용 시 `Oracle SQL collection id: ...`
 
 즉 producer 쪽에서는 process exit code뿐 아니라, 성공 로그에 stable path가 찍혔는지도 같이 확인할 수 있습니다.
 consumer 쪽에서는 이 stdout을 직접 믿기보다 stable sidecar path를 다시 읽는 편이 더 안전합니다.
 
 ## 9. Failure Semantics
 - `Alert sidecar generation failed: ...` 가 출력되면 non-zero exit로 본다.
+- `Oracle SQL persistence is enabled but credentials are missing: ...` 는 데이터 수집 전 preflight 실패이므로 credential 환경변수를 보강한 뒤 재실행한다.
+- `Oracle SQL preflight failed. ...` 는 데이터 수집 전 DB 접속/네트워크 실패로 본다.
 - daily / intraday 모두 alert sidecar 생성 실패는 non-zero exit다.
 - 다만 raw report / raw collection artifact는 sidecar 실패 이전에 이미 남아 있을 수 있다.
 - intraday에서 Twelve Data 일일 크레딧 소진은 process crash가 아니라 metadata 기록 후 종료될 수 있다.
@@ -239,13 +245,13 @@ cd /home/ubuntu/project/nasdaq-turnaround-screener
 uv sync --extra dev
 
 scheduled jobs:
-- producer 09:40 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id open-1 --skip-install
-- producer 10:10 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id open-2 --skip-install
-- producer 12:00 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id midday-1 --skip-install
-- producer 13:00 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id midday-2 --skip-install
-- producer 15:00 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id power-hour-1 --skip-install
-- producer 16:00 ET: ./scripts/run_intraday_window.py --date <NY_DATE> --window-id power-hour-2 --skip-install
-- producer 16:30 ET: ./scripts/run_daily.py --date <NY_DATE> --use-staged-intraday --skip-install
+- producer 09:40 ET: ./scripts/run_intraday_window.py --window-id open-1 --skip-install --persist-oracle-sql
+- producer 10:10 ET: ./scripts/run_intraday_window.py --window-id open-2 --skip-install --persist-oracle-sql
+- producer 12:00 ET: ./scripts/run_intraday_window.py --window-id midday-1 --skip-install --persist-oracle-sql
+- producer 13:00 ET: ./scripts/run_intraday_window.py --window-id midday-2 --skip-install --persist-oracle-sql
+- producer 15:00 ET: ./scripts/run_intraday_window.py --window-id power-hour-1 --skip-install --persist-oracle-sql
+- producer 16:00 ET: ./scripts/run_intraday_window.py --window-id power-hour-2 --skip-install --persist-oracle-sql
+- producer 16:30 ET: ./scripts/run_daily.py --use-staged-intraday --skip-install --persist-oracle-sql
 - daily consumer 16:35/16:40/16:45 ET: read stable daily sidecar and deliver only when dedupe_key is new
 
 consumer paths:

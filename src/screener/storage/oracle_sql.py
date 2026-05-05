@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
-from screener.config import Settings
+from screener.config import (
+    ORACLE_SQL_CONNECT_STRING_ENV_NAMES,
+    ORACLE_SQL_PASSWORD_ENV_NAMES,
+    ORACLE_SQL_USER_ENV_NAMES,
+    Settings,
+)
 from screener.models import ScreenRunResult
 from screener.storage.oracle_schema import initialize_oracle_schema
 
@@ -35,15 +40,7 @@ class OracleSqlStorage:
         if not settings.oracle_sql_enabled:
             return None
 
-        missing = [
-            name
-            for name, value in {
-                "oracle_sql_user": settings.oracle_sql_user,
-                "oracle_sql_password": settings.oracle_sql_password,
-                "oracle_sql_connect_string": settings.oracle_sql_connect_string,
-            }.items()
-            if not value
-        ]
+        missing = _missing_credential_env_names(settings)
         if missing:
             raise OracleSqlStorageError(
                 "Oracle SQL persistence is enabled but credentials are missing: " + ", ".join(missing)
@@ -66,6 +63,22 @@ class OracleSqlStorage:
                 dsn=credentials.connect_string,
             )
         )
+
+    def preflight(self) -> None:
+        """Validate that Oracle SQL can be reached before expensive collection starts."""
+        connection = self.connector()
+        try:
+            cursor = connection.cursor()
+            try:
+                cursor.execute("SELECT 1 FROM DUAL")
+            finally:
+                _close_safely(cursor)
+        except Exception as exc:
+            raise OracleSqlStorageError(
+                "Oracle SQL preflight failed. Verify Oracle credential environment variables and network connectivity."
+            ) from exc
+        finally:
+            _close_safely(connection)
 
     def persist_daily_run(self, result: ScreenRunResult) -> str:
         connection = self.connector()
@@ -358,6 +371,15 @@ class OracleSqlStorage:
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _missing_credential_env_names(settings: Settings) -> list[str]:
+    credential_fields = (
+        (settings.oracle_sql_user, ORACLE_SQL_USER_ENV_NAMES),
+        (settings.oracle_sql_password, ORACLE_SQL_PASSWORD_ENV_NAMES),
+        (settings.oracle_sql_connect_string, ORACLE_SQL_CONNECT_STRING_ENV_NAMES),
+    )
+    return ["/".join(env_names) for value, env_names in credential_fields if not value]
 
 
 def _read_json(path: Path) -> dict[str, Any]:

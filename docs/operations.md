@@ -19,13 +19,15 @@ uv run python -m screener.cli.main run --date 2026-04-21 --use-staged-intraday
 uv run python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 uv run python -m screener.cli.main run --date 2026-05-01 --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 
+uv run python scripts/run_daily.py --skip-install --persist-oracle-sql
+uv run python scripts/run_daily.py --date ny-today --use-staged-intraday --skip-install --persist-oracle-sql
 uv run python scripts/run_daily.py --date 2026-04-21 --skip-install
 uv run python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --skip-install
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --universe-name user-watchlist --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 ```
 
 daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-MM-DD/` 출력, `output/daily/latest` 갱신까지 처리합니다.
-`--date` 는 **America/New_York 거래일 기준**으로 넣는 것을 전제로 합니다. 스케줄러가 UTC/KST에서 돈다면 당일 로컬 날짜를 그대로 쓰지 말고 NY trading day를 명시적으로 넘기는 편이 안전합니다.
+운영 wrapper의 `--date` 기본값은 현재 `America/New_York` 날짜입니다. `--date`를 생략하거나 `--date auto`/`--date ny-today`를 주면 UTC/KST 스케줄러에서도 NY 기준 날짜를 사용합니다. 명시적 `YYYY-MM-DD` 값은 그대로 보존됩니다.
 - `run` CLI는 stdout에 `Run universe: ...` 및 `Data quality: nonempty=..., latest_date_mismatch=..., insufficient_history=...` 요약을 함께 출력합니다.
 - `--tickers`/`--universe-tickers`를 명시하면 custom universe가 활성화되고 기본 이름은 `user-watchlist` 입니다. `--universe-name`으로 artifact metadata의 universe 이름을 바꿀 수 있으며, 이 옵션은 custom ticker list와 함께만 허용됩니다.
 - ticker list는 comma-separated 입력을 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 옵션을 주지 않으면 기존 NASDAQ-100 기본 동작과 output schema가 유지됩니다.
@@ -68,6 +70,8 @@ uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-ind
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0 --persist-oracle-sql
 
 # 운영 권장 entrypoint: wrapper
+uv run python scripts/run_intraday_window.py --skip-install --window-id open-1 --persist-oracle-sql
+uv run python scripts/run_intraday_window.py --date ny-today --window-id open-1 --skip-install --persist-oracle-sql
 uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install
 uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install --persist-oracle-sql
 ```
@@ -76,6 +80,7 @@ uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-
 - OpenClaw/cron wrapper인 `scripts/run_intraday_window.py` 는 각 slot마다 **NASDAQ-100 전체를 다시 수집**합니다. `open-1` 이 17개만 담당하는 식의 분할 수집은 더 이상 기본 동작이 아닙니다.
 - bare `collect-window --window-index 0` 예시는 raw CLI 기본값을 보여주는 용도입니다. 이 경우 실제 동작은 `total_windows=6`, `max_credits_per_minute=8` 이므로 NASDAQ-100 전체가 아니라 1개 shard만 수집합니다.
 - wrapper 기본값은 `collect-window --window-index 0 --total-windows 1 --max-credits-per-minute 5` 이며, Twelve Data free plan `8 credits/min` 대비 여유를 더 남겨 rate-limit 실패를 줄입니다.
+- wrapper의 `--date` 기본값은 현재 `America/New_York` 날짜입니다. KST/UTC cron 또는 LLM prompt producer는 날짜를 직접 계산하지 말고 `--date`를 생략하거나 `--date ny-today`를 쓰면 됩니다.
 - 운영에서는 wrapper 사용을 기본값으로 두고, raw `collect-window` CLI는 수동 분할 수집이나 ad-hoc 점검 용도로 보는 편이 안전합니다.
 - 실제 artifact는 `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../` 아래에 기록됩니다. wrapper 기본값에서는 `window-01-of-01` 아래에 쌓입니다.
 - `collection-metadata.json` 에는 `planned_tickers`, `minute_batches`, `successes`, `failures`, `skipped_due_to_credit_exhaustion`, `remaining_tickers`, `uncollected_tickers` 와 집계 count가 함께 기록됩니다.
@@ -146,7 +151,8 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 - `SCREENER_INTRADAY_OUTPUT_ROOT`: intraday artifact root override
 - `SCREENER_INTRADAY_COLLECTOR_COMMAND`: intraday runner command template override
 - `SCREENER_ORACLE_SQL_ENABLED=1`: Oracle SQL persistence 기본 활성화
-- `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING`: Oracle SQL credential override
+- `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING`: Oracle SQL credential
+- `SCREENER_ORACLE_SQL_USER`, `SCREENER_ORACLE_SQL_PASSWORD`, `SCREENER_ORACLE_SQL_CONNECT_STRING`: 기존/레거시 Oracle SQL credential alias. 같은 값이 둘 다 있으면 `ORACLE_DB_*` 가 우선합니다.
 - `SCREENER_OPENCLAW_SECRETS_PATH` 또는 `OPENCLAW_SECRETS_PATH`: OpenClaw secrets file path override
 
 환경변수가 없으면 기본적으로 `~/.openclaw/secrets.json` 에서 provider / Oracle credential을 읽습니다.
@@ -158,13 +164,15 @@ uv run python -m screener.cli.main init-oracle-schema
 
 - persistence write path는 더 이상 runtime DDL을 수행하지 않습니다.
 - Oracle 저장을 쓰기 전에 `uv run python -m screener.cli.main init-oracle-schema` 를 1회 실행해 schema를 준비해야 합니다.
+- `--persist-oracle-sql` 이 켜진 non-dry-run `run` / `collect-window` 는 데이터 수집 전에 Oracle credential/import/connectivity preflight를 먼저 실행합니다. credential 누락은 secret 값을 출력하지 않고 non-zero exit로 즉시 실패합니다.
+- preflight가 성공한 뒤 DB가 중간에 장애를 일으키면 persistence 단계에서 non-zero exit가 날 수 있습니다. 이 경우 raw artifact가 이미 남아 있을 수 있으므로 producer 성공 기준은 process exit code와 `Oracle SQL run id`/`Oracle SQL collection id` 로그를 함께 확인합니다.
 - `risk_adjusted_score` 같은 새 저장 컬럼이 추가된 배포 후에는 기존 DB에도 같은 명령을 다시 1회 실행해 additive migration을 적용해야 합니다.
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
 ## 9. OpenClaw Usage
 - 이 저장소는 cron 정의를 포함하지 않습니다. OpenClaw가 외부에서 명령을 호출하는 전제를 둡니다.
-- 장중 수집은 `uv run python scripts/run_intraday_window.py --date <NY_DATE> --window-id <ID> --skip-install` 형태로 호출하면 됩니다.
-- 장 마감 후 daily run은 `uv run python scripts/run_daily.py --date <NY_DATE> --skip-install` 형태로 호출하면 됩니다.
+- 장중 수집은 `uv run python scripts/run_intraday_window.py --window-id <ID> --skip-install --persist-oracle-sql` 형태로 호출하면 됩니다. wrapper가 `America/New_York` 현재 날짜를 자동 적용합니다.
+- 장 마감 후 daily run은 `uv run python scripts/run_daily.py --use-staged-intraday --skip-install --persist-oracle-sql` 형태로 호출하면 됩니다.
 - Oracle을 쓰는 환경이면 bootstrap 단계에서 `uv run python -m screener.cli.main init-oracle-schema` 를 먼저 1회 실행해야 합니다.
 - 이번 알고리즘/DB schema 변경처럼 새 Oracle 컬럼이 추가된 배포 뒤에는 OpenClaw producer cron을 재개하기 전에 `init-oracle-schema` 를 한 번 더 실행해야 합니다.
 - OpenClaw가 읽어야 하는 daily 결과 진입점은 `output/daily/latest/alert-events.json` 입니다.

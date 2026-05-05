@@ -5,8 +5,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from screener.collector import CollectedQuote, CollectionArtifacts, CollectionPlan, CollectionResult
+from screener.config import Settings
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown, ScreenRunResult
-from screener.storage.oracle_sql import OracleSqlStorage
+from screener.storage.oracle_sql import OracleSqlStorage, OracleSqlStorageError
 
 
 class FakeCursor:
@@ -160,6 +161,28 @@ def test_persist_daily_run_executes_schema_and_inserts(tmp_path: Path) -> None:
     assert any("CREATE TABLE screen_runs" in statement for statement, _ in connection.statements)
     assert any("ALTER TABLE screen_candidates ADD ( indicator_snapshot_json CLOB )" in statement for statement, _ in connection.statements)
     assert any("ALTER TABLE screen_candidates ADD ( risk_adjusted_score NUMBER )" in statement for statement, _ in connection.statements)
+
+
+def test_from_settings_reports_missing_oracle_credentials_without_secret_values() -> None:
+    settings = Settings(
+        oracle_sql_enabled=True,
+        oracle_sql_user=None,
+        oracle_sql_password=None,
+        oracle_sql_connect_string=None,
+    )
+
+    try:
+        OracleSqlStorage.from_settings(settings)
+    except OracleSqlStorageError as exc:
+        message = str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected OracleSqlStorageError")
+
+    assert "Oracle SQL persistence is enabled but credentials are missing" in message
+    assert "ORACLE_DB_USER/SCREENER_ORACLE_SQL_USER" in message
+    assert "ORACLE_DB_PASSWORD/SCREENER_ORACLE_SQL_PASSWORD" in message
+    assert "ORACLE_DB_CONNECT_STRING/SCREENER_ORACLE_SQL_CONNECT_STRING" in message
+    assert "None" not in message
 
 
 def test_persist_daily_run_inserts_without_schema_ddl(tmp_path: Path) -> None:

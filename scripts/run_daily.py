@@ -7,17 +7,37 @@ import shutil
 import subprocess
 import sys
 import venv
-from datetime import date
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+for path in (SRC_ROOT, PROJECT_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from screener.dates import resolve_ny_run_date
 
 DEFAULT_OUTPUT_ROOT = Path("output/daily")
 DEFAULT_CUSTOM_UNIVERSE_NAME = "user-watchlist"
 LATEST_NAME = "latest"
 
 
+def resolve_run_date(value: str | None, *, clock=None) -> str:
+    try:
+        return resolve_ny_run_date(value, clock=clock)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Cron-friendly NASDAQ screener runner.")
-    parser.add_argument("--date", dest="run_date", default=date.today().isoformat(), help="Run date in YYYY-MM-DD format. Defaults to today.")
+    parser.add_argument(
+        "--date",
+        dest="run_date",
+        type=resolve_run_date,
+        default=resolve_run_date(None),
+        help="Run date as YYYY-MM-DD, 'auto', or 'ny-today'. Defaults to America/New_York today.",
+    )
     parser.add_argument(
         "--output-root",
         type=Path,

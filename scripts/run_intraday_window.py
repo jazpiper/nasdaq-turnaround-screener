@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from datetime import date
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,20 +13,16 @@ for path in (SRC_ROOT, PROJECT_ROOT):
         sys.path.insert(0, str(path))
 
 from screener.config import get_settings
+from screener.dates import resolve_ny_run_date
 from screener.intraday_ops import DEFAULT_COLLECTOR_COMMAND_TEMPLATE, IntradayPlan, build_collector_command, intraday_output_dir
 from scripts.run_daily import ensure_venv, project_root
 
 
-def parse_run_date(value: str) -> str:
+def parse_run_date(value: str | None, *, clock=None) -> str:
     try:
-        parsed = date.fromisoformat(value)
+        return resolve_ny_run_date(value, clock=clock)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("Date must be in YYYY-MM-DD format.") from exc
-
-    normalized = parsed.isoformat()
-    if normalized != value:
-        raise argparse.ArgumentTypeError("Date must be in YYYY-MM-DD format.")
-    return normalized
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,8 +31,8 @@ def parse_args() -> argparse.Namespace:
         "--date",
         dest="run_date",
         type=parse_run_date,
-        default=date.today().isoformat(),
-        help="Run date in YYYY-MM-DD format. Defaults to today.",
+        default=parse_run_date(None),
+        help="Run date as YYYY-MM-DD, 'auto', or 'ny-today'. Defaults to America/New_York today.",
     )
     parser.add_argument("--window-id", required=True, help="Configured intraday window identifier, for example open-1 or power-hour-2.")
     parser.add_argument("--output-root", type=Path, default=None, help="Root directory for staged intraday outputs. Defaults to config/env setting.")

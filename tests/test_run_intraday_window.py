@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -10,6 +12,13 @@ from scripts import run_intraday_window
 
 def test_parse_run_date_accepts_canonical_iso_value() -> None:
     assert run_intraday_window.parse_run_date("2026-04-21") == "2026-04-21"
+
+
+def test_parse_run_date_accepts_ny_today_alias() -> None:
+    clock = lambda: datetime(2026, 5, 5, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    assert run_intraday_window.parse_run_date("ny-today", clock=clock) == "2026-05-04"
+    assert run_intraday_window.parse_run_date("auto", clock=clock) == "2026-05-04"
 
 
 def test_parse_run_date_rejects_path_like_value() -> None:

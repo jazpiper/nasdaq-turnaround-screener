@@ -4,25 +4,34 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from screener.alerts import AlertSidecarError
 from screener.backtest import BacktestArtifacts
 from screener.cli.main import app
+from screener.config import Settings
 from screener.models import CandidateResult, RunArtifacts, RunMetadata, ScreenRunResult, ScoreBreakdown
 
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _disable_env_oracle_default(monkeypatch):
+    monkeypatch.delenv("SCREENER_ORACLE_SQL_ENABLED", raising=False)
+
+
 class StubPipeline:
     last_settings = None
     last_context = None
+    run_called = False
 
     def __init__(self, settings):
         self.settings = settings
         StubPipeline.last_settings = settings
 
     def run(self, context):
+        StubPipeline.run_called = True
         StubPipeline.last_context = context
         result = ScreenRunResult(
             metadata=RunMetadata(
@@ -354,6 +363,27 @@ def test_run_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -> None:
     assert "Oracle SQL run id: run_test" in result.stdout
 
 
+def test_run_persist_oracle_sql_preflights_before_pipeline_when_credentials_missing(tmp_path: Path, monkeypatch) -> None:
+    StubPipeline.run_called = False
+    monkeypatch.setattr("screener.cli.main.ScreenPipeline", StubPipeline)
+    monkeypatch.setattr(
+        "screener.cli.main.get_settings",
+        lambda output_dir=None, **kwargs: Settings(output_dir=Path(output_dir or "output")),
+    )
+
+    result = runner.invoke(
+        app,
+        ["run", "--date", "2026-04-21", "--output-dir", str(tmp_path), "--persist-oracle-sql"],
+    )
+
+    output = result.stdout + result.stderr
+    assert result.exit_code == 1
+    assert "Oracle SQL persistence is enabled but credentials are missing" in output
+    assert "super_secret" not in output
+    assert StubPipeline.run_called is False
+    assert not any(tmp_path.iterdir())
+
+
 def test_init_oracle_schema_command(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("screener.cli.main.OracleSqlStorage.from_settings", lambda settings: StubOracleSqlStorage())
 
@@ -400,6 +430,41 @@ def test_collect_window_can_persist_to_oracle_sql(tmp_path: Path, monkeypatch) -
 
     assert result.exit_code == 0
     assert "Oracle SQL collection id: intraday_test" in result.stdout
+
+
+def test_collect_window_persist_oracle_sql_preflights_before_collection_when_credentials_missing(tmp_path: Path, monkeypatch) -> None:
+    class RecordingCollector(StubCollector):
+        run_called = False
+
+        def run_window(self, **kwargs):
+            RecordingCollector.run_called = True
+            return super().run_window(**kwargs)
+
+    monkeypatch.setattr("screener.cli.main.TwelveDataWindowCollector", RecordingCollector)
+    monkeypatch.setattr(
+        "screener.cli.main.get_settings",
+        lambda output_dir=None, market_data_provider=None, **kwargs: Settings(output_dir=Path(output_dir or "output")),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "collect-window",
+            "--date",
+            "2026-04-21",
+            "--window-index",
+            "0",
+            "--output-dir",
+            str(tmp_path),
+            "--persist-oracle-sql",
+        ],
+    )
+
+    output = result.stdout + result.stderr
+    assert result.exit_code == 1
+    assert "Oracle SQL persistence is enabled but credentials are missing" in output
+    assert RecordingCollector.run_called is False
+    assert not any(tmp_path.iterdir())
 
 
 def test_collect_window_exits_nonzero_when_alert_sidecar_generation_fails(tmp_path: Path, monkeypatch) -> None:

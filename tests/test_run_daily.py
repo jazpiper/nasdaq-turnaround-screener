@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from scripts import run_daily
 from scripts.run_daily import (
     DEFAULT_OUTPUT_ROOT,
     LATEST_NAME,
     dated_output_dir,
+    resolve_run_date,
     resolve_output_root,
     update_latest_pointer,
 )
@@ -16,6 +19,25 @@ def test_dated_output_dir_uses_run_date() -> None:
     output_root = Path("output/daily")
 
     assert dated_output_dir(output_root, "2026-04-21") == Path("output/daily/2026-04-21")
+
+
+def test_resolve_run_date_defaults_to_new_york_date() -> None:
+    clock = lambda: datetime(2026, 5, 5, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    assert resolve_run_date(None, clock=clock) == "2026-05-04"
+
+
+def test_resolve_run_date_accepts_auto_aliases() -> None:
+    clock = lambda: datetime(2026, 5, 5, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    assert resolve_run_date("auto", clock=clock) == "2026-05-04"
+    assert resolve_run_date("ny-today", clock=clock) == "2026-05-04"
+
+
+def test_resolve_run_date_preserves_explicit_iso_date() -> None:
+    clock = lambda: datetime(2026, 5, 5, 8, 30, tzinfo=ZoneInfo("Asia/Seoul"))
+
+    assert resolve_run_date("2026-05-05", clock=clock) == "2026-05-05"
 
 
 def test_resolve_output_root_keeps_nasdaq_default() -> None:

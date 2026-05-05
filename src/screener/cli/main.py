@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -94,6 +95,7 @@ def run(
         settings.intraday_output_root = intraday_output_root
     if persist_oracle_sql:
         settings.oracle_sql_enabled = True
+    oracle_storage = _prepare_oracle_storage_if_enabled(settings) if settings.oracle_sql_enabled and not dry_run else None
     context = build_context(run_date=parse_run_date(run_date), dry_run=dry_run, output_dir=settings.output_dir, run_mode=settings.default_run_mode, universe_name=settings.universe_name)
     try:
         result, artifacts = ScreenPipeline(settings=settings).run(context)
@@ -118,7 +120,7 @@ def run(
         typer.echo("Artifacts skipped (--dry-run).")
         return
 
-    run_id = _persist_daily_run_if_enabled(settings, result)
+    run_id = _persist_daily_run_if_enabled(settings, result, storage=oracle_storage)
     typer.echo(f"Markdown report: {artifacts.markdown_path}")
     typer.echo(f"JSON report: {artifacts.json_report_path}")
     typer.echo(f"Metadata report: {artifacts.metadata_path}")
@@ -143,6 +145,7 @@ def collect_window(
     settings = get_settings(output_dir=output_dir, market_data_provider="twelve-data")
     if persist_oracle_sql:
         settings.oracle_sql_enabled = True
+    oracle_storage = _prepare_oracle_storage_if_enabled(settings) if settings.oracle_sql_enabled and not dry_run else None
     collector = TwelveDataWindowCollector(settings=settings)
     try:
         result = collector.run_window(
@@ -167,7 +170,7 @@ def collect_window(
         typer.echo("Artifacts skipped (--dry-run).")
         return
 
-    collection_run_id = _persist_intraday_run_if_enabled(settings, result)
+    collection_run_id = _persist_intraday_run_if_enabled(settings, result, storage=oracle_storage)
     typer.echo(f"Run directory: {result.artifacts.run_directory}")
     typer.echo(f"Metadata report: {result.artifacts.metadata_path}")
     typer.echo(f"Quotes report: {result.artifacts.quotes_path}")
@@ -420,12 +423,27 @@ def tune(
             typer.echo(f"  excess_return={best.excess_return:+.4f}%  sample_count={best.sample_count}")
 
 
-def _persist_daily_run_if_enabled(settings: Settings, result: ScreenRunResult) -> str | None:
+def _prepare_oracle_storage_if_enabled(settings: Settings) -> OracleSqlStorage | None:
     try:
         storage = OracleSqlStorage.from_settings(settings)
+        if storage is not None:
+            preflight = getattr(storage, "preflight", None)
+            if callable(preflight):
+                preflight()
     except OracleSqlStorageError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
+    return storage
+
+
+def _persist_daily_run_if_enabled(
+    settings: Settings,
+    result: ScreenRunResult,
+    *,
+    storage: Any | None = None,
+) -> str | None:
+    if storage is None:
+        storage = _prepare_oracle_storage_if_enabled(settings)
 
     if storage is None:
         return None
@@ -437,12 +455,14 @@ def _persist_daily_run_if_enabled(settings: Settings, result: ScreenRunResult) -
         raise typer.Exit(code=1) from exc
 
 
-def _persist_intraday_run_if_enabled(settings: Settings, result: CollectionResult) -> str | None:
-    try:
-        storage = OracleSqlStorage.from_settings(settings)
-    except OracleSqlStorageError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from exc
+def _persist_intraday_run_if_enabled(
+    settings: Settings,
+    result: CollectionResult,
+    *,
+    storage: Any | None = None,
+) -> str | None:
+    if storage is None:
+        storage = _prepare_oracle_storage_if_enabled(settings)
 
     if storage is None:
         return None

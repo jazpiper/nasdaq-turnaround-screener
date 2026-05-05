@@ -9,6 +9,10 @@ from screener.secrets import default_openclaw_secrets_path, load_openclaw_secret
 
 DEFAULT_TWELVE_DATA_BASE_URL = "https://api.twelvedata.com/time_series"
 DEFAULT_INTRADAY_OUTPUT_ROOT = Path("output/intraday")
+ORACLE_SQL_USER_ENV_NAMES = ("ORACLE_DB_USER", "SCREENER_ORACLE_SQL_USER")
+ORACLE_SQL_PASSWORD_ENV_NAMES = ("ORACLE_DB_PASSWORD", "SCREENER_ORACLE_SQL_PASSWORD")
+ORACLE_SQL_CONNECT_STRING_ENV_NAMES = ("ORACLE_DB_CONNECT_STRING", "SCREENER_ORACLE_SQL_CONNECT_STRING")
+OPENCLAW_SECRETS_PATH_ENV_NAMES = ("SCREENER_OPENCLAW_SECRETS_PATH", "OPENCLAW_SECRETS_PATH")
 
 
 @dataclass(slots=True)
@@ -47,7 +51,7 @@ def get_settings(
     twelve_data_api_key: str | None = None,
     openclaw_secrets_path: str | Path | None = None,
 ) -> Settings:
-    resolved_secrets_path = Path(openclaw_secrets_path).expanduser() if openclaw_secrets_path is not None else default_openclaw_secrets_path()
+    resolved_secrets_path = _resolve_openclaw_secrets_path(openclaw_secrets_path)
     secrets = load_openclaw_secrets(resolved_secrets_path)
     resolved_twelve_data_api_key = twelve_data_api_key or os.getenv("TWELVE_DATA_API_KEY") or _coerce_optional_string(secrets.get("/twelveData/apiKey") if secrets else None)
     resolved_market_data_provider = market_data_provider or os.getenv("SCREENER_MARKET_DATA_PROVIDER") or _default_market_data_provider()
@@ -63,9 +67,9 @@ def get_settings(
         daily_intraday_source_mode=(os.getenv("SCREENER_DAILY_INTRADAY_SOURCE_MODE", "disabled").strip().lower() or "disabled"),
         earnings_calendar_path=_coerce_optional_path(os.getenv("SCREENER_EARNINGS_CALENDAR_PATH")),
         oracle_sql_enabled=_coerce_bool(os.getenv("SCREENER_ORACLE_SQL_ENABLED"), default=False),
-        oracle_sql_user=_coerce_optional_string(os.getenv("ORACLE_DB_USER")) or _coerce_optional_string(secrets.get("/oracleDb/user") if secrets else None),
-        oracle_sql_password=_coerce_optional_string(os.getenv("ORACLE_DB_PASSWORD")) or _coerce_optional_string(secrets.get("/oracleDb/password") if secrets else None),
-        oracle_sql_connect_string=_coerce_optional_string(os.getenv("ORACLE_DB_CONNECT_STRING")) or _coerce_optional_string(secrets.get("/oracleDb/connectString") if secrets else None),
+        oracle_sql_user=_first_optional_env(ORACLE_SQL_USER_ENV_NAMES) or _coerce_optional_string(secrets.get("/oracleDb/user") if secrets else None),
+        oracle_sql_password=_first_optional_env(ORACLE_SQL_PASSWORD_ENV_NAMES) or _coerce_optional_string(secrets.get("/oracleDb/password") if secrets else None),
+        oracle_sql_connect_string=_first_optional_env(ORACLE_SQL_CONNECT_STRING_ENV_NAMES) or _coerce_optional_string(secrets.get("/oracleDb/connectString") if secrets else None),
     )
     if output_dir is not None:
         settings.output_dir = Path(output_dir)
@@ -74,6 +78,23 @@ def get_settings(
 
 def _default_market_data_provider() -> str:
     return "yfinance"
+
+
+def _resolve_openclaw_secrets_path(openclaw_secrets_path: str | Path | None) -> Path:
+    if openclaw_secrets_path is not None:
+        return Path(openclaw_secrets_path).expanduser()
+    env_path = _first_optional_env(OPENCLAW_SECRETS_PATH_ENV_NAMES)
+    if env_path is not None:
+        return Path(env_path).expanduser()
+    return default_openclaw_secrets_path()
+
+
+def _first_optional_env(names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = _coerce_optional_string(os.getenv(name))
+        if value is not None:
+            return value
+    return None
 
 
 def _coerce_optional_string(value: object) -> str | None:
