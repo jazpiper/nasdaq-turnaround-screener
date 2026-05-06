@@ -38,6 +38,7 @@ class YFinanceMarketDataProvider:
         self.fetcher = fetcher or YFinanceDailyBarFetcher()
         self._history_by_ticker: dict[str, pd.DataFrame] = {}
         self._failures_by_ticker: dict[str, str] = {}
+        self._provider_status: list[dict[str, object]] = []
         self._prepared_tickers: tuple[str, ...] = ()
 
     def prepare(self, tickers: list[TickerInput], context: PipelineContext) -> None:
@@ -64,6 +65,7 @@ class YFinanceMarketDataProvider:
             for ticker, bars in fetch_result.bars_by_ticker.items()
         }
         self._failures_by_ticker = dict(fetch_result.failed_tickers)
+        self._provider_status = [dict(status) for status in getattr(fetch_result, "source_statuses", [])]
         self._prepared_tickers = ticker_symbols
 
     def fetch_history(self, ticker: TickerInput, context: PipelineContext) -> pd.DataFrame:
@@ -81,6 +83,10 @@ class YFinanceMarketDataProvider:
     @property
     def failures(self) -> dict[str, str]:
         return dict(self._failures_by_ticker)
+
+    @property
+    def provider_status(self) -> list[dict[str, object]]:
+        return [dict(status) for status in self._provider_status]
 
 
 class PreferredIntradaySnapshotMarketDataProvider:
@@ -127,6 +133,10 @@ class PreferredIntradaySnapshotMarketDataProvider:
     @property
     def failures(self) -> dict[str, str]:
         return dict(getattr(self.base_provider, "failures", {}))
+
+    @property
+    def provider_status(self) -> list[dict[str, object]]:
+        return [dict(status) for status in getattr(self.base_provider, "provider_status", [])]
 
 
 class TechnicalIndicatorEngine:

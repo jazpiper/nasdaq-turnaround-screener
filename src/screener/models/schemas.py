@@ -55,6 +55,7 @@ class RunMetadata(BaseModel):
     insufficient_history_count: int = 0
     planned_tickers: list[str] = Field(default_factory=list)
     data_failures: list[str] = Field(default_factory=list)
+    market_data_provider_status: list[dict[str, object]] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 

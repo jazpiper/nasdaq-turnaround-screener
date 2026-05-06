@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from unittest import mock
 
 import pandas as pd
@@ -15,13 +16,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from screener.config import get_settings
 from screener.data.market_data import (
     DEFAULT_HTTP_TIMEOUT_SECONDS,
+    FetchResult,
     MarketDataProviderError,
+    ResilientMarketDataFetcher,
     TwelveDataDailyBarFetcher,
     YFinanceDailyBarFetcher,
     _read_url,
     build_market_data_fetcher,
     normalize_ohlcv_rows,
 )
+from screener.data.resilience import MarketDataRateLimitError, ProviderResilienceState
 from screener.secrets import load_openclaw_secrets
 
 
@@ -212,6 +216,145 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(observed["url"], "https://example.com/test")
         self.assertEqual(observed["timeout"], DEFAULT_HTTP_TIMEOUT_SECONDS)
 
+    def test_read_url_classifies_http_429_without_leaking_url(self):
+        def fake_urlopen(request, timeout=None):
+            raise HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests api_key=secret-value",
+                {"Retry-After": "2"},
+                None,
+            )
+
+        with mock.patch("screener.data.market_data.urlopen", side_effect=fake_urlopen):
+            with self.assertRaises(MarketDataRateLimitError) as raised:
+                _read_url("https://example.com/time_series?apikey=secret-value")
+
+        self.assertEqual(raised.exception.retry_after_seconds, 2.0)
+        self.assertNotIn("secret-value", str(raised.exception))
+        self.assertNotIn("example.com", str(raised.exception))
+
+    def test_twelve_data_retries_rate_limit_and_records_status(self):
+        responses = [
+            json.dumps({"status": "error", "message": "429 too many requests api_key=secret-value"}),
+            _twelve_data_success_payload(),
+        ]
+        sleeps: list[float] = []
+
+        def reader(url: str) -> str:
+            return responses.pop(0)
+
+        fetcher = TwelveDataDailyBarFetcher(
+            api_key="secret",
+            response_reader=reader,
+            max_retries=1,
+            initial_backoff_seconds=0.5,
+            max_backoff_seconds=2.0,
+            sleeper=sleeps.append,
+            resilience_state=ProviderResilienceState(),
+        )
+        result = fetcher.fetch(["AAPL"])
+
+        self.assertEqual(result.failed_tickers, {})
+        self.assertIn("AAPL", result.bars_by_ticker)
+        self.assertEqual(sleeps, [0.5])
+        self.assertEqual(result.source_statuses[0]["provider"], "twelve-data")
+        self.assertEqual(result.source_statuses[0]["retry_count"], 1)
+        self.assertEqual(result.source_statuses[0]["status"], "ok")
+
+    def test_twelve_data_cooldown_short_circuits_after_rate_limit(self):
+        calls = 0
+
+        def reader(url: str) -> str:
+            nonlocal calls
+            calls += 1
+            return json.dumps({"status": "error", "message": "429 current limit being exceeded"})
+
+        state = ProviderResilienceState()
+        fetcher = TwelveDataDailyBarFetcher(
+            api_key="secret",
+            response_reader=reader,
+            max_retries=0,
+            cooldown_seconds=30.0,
+            sleeper=lambda seconds: None,
+            resilience_state=state,
+        )
+
+        first = fetcher.fetch(["AAPL"])
+        second = fetcher.fetch(["MSFT"])
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(first.source_statuses[0]["status"], "rate_limited")
+        self.assertEqual(second.source_statuses[0]["cooldown_active"], True)
+        self.assertEqual(second.failed_tickers["MSFT"], "rate_limited: provider cooldown active")
+
+    def test_resilient_fetcher_falls_back_failed_tickers_and_keeps_statuses(self):
+        class FakeFetcher:
+            def __init__(self, name, result):
+                self.provider_name = name
+                self.result = result
+                self.calls: list[tuple[str, ...]] = []
+
+            def fetch(self, tickers):
+                self.calls.append(tuple(tickers))
+                return self.result
+
+        good_bar = normalize_ohlcv_rows("GOOD", [_ohlcv_row()])
+        bad_bar = normalize_ohlcv_rows("BAD", [_ohlcv_row(close="22")])
+        primary = FakeFetcher(
+            "primary-source",
+            FetchResult(
+                bars_by_ticker={"GOOD": good_bar},
+                failed_tickers={"BAD": "429 too many requests token=secret-value"},
+                source_statuses=[
+                    {
+                        "provider": "primary-source",
+                        "status": "partial_success",
+                        "attempted_ticker_count": 2,
+                        "successful_ticker_count": 1,
+                        "failed_ticker_count": 1,
+                        "error_kind": "rate_limited",
+                        "rate_limited": True,
+                        "message": "429 too many requests token=secret-value",
+                    }
+                ],
+            ),
+        )
+        fallback = FakeFetcher(
+            "fallback-source",
+            FetchResult(
+                bars_by_ticker={"BAD": bad_bar},
+                failed_tickers={},
+                source_statuses=[
+                    {
+                        "provider": "fallback-source",
+                        "status": "ok",
+                        "attempted_ticker_count": 1,
+                        "successful_ticker_count": 1,
+                        "failed_ticker_count": 0,
+                    }
+                ],
+            ),
+        )
+
+        result = ResilientMarketDataFetcher([("primary-source", primary), ("fallback-source", fallback)]).fetch(
+            ["GOOD", "BAD"]
+        )
+
+        self.assertEqual(primary.calls, [("GOOD", "BAD")])
+        self.assertEqual(fallback.calls, [("BAD",)])
+        self.assertEqual(result.failed_tickers, {})
+        self.assertEqual(set(result.bars_by_ticker), {"GOOD", "BAD"})
+        self.assertEqual(result.source_statuses[0]["fallback_provider"], "fallback-source")
+        self.assertEqual(result.source_statuses[1]["role"], "fallback")
+        self.assertNotIn("secret-value", json.dumps(result.source_statuses))
+
+    def test_build_market_data_fetcher_accepts_fallback_chain(self):
+        fetcher = build_market_data_fetcher("twelve-data,yfinance", twelve_data_api_key="secret")
+
+        self.assertIsInstance(fetcher, ResilientMarketDataFetcher)
+        self.assertEqual([name for name, _ in fetcher.providers], ["twelve-data", "yfinance"])
+
     def test_yfinance_fetcher_handles_single_ticker_multiindex_columns(self):
         index = pd.Index([pd.Timestamp("2026-04-20"), pd.Timestamp("2026-04-21")], name="Date")
         columns = pd.MultiIndex.from_tuples(
@@ -303,6 +446,21 @@ class MarketDataProviderTests(unittest.TestCase):
 
         self.assertEqual(settings.market_data_provider, "yfinance")
         self.assertIsNone(settings.twelve_data_api_key)
+
+
+def _ohlcv_row(*, close: str = "10.5") -> dict[str, str]:
+    return {
+        "datetime": "2026-04-21",
+        "open": "10",
+        "high": "11",
+        "low": "9",
+        "close": close,
+        "volume": "100",
+    }
+
+
+def _twelve_data_success_payload() -> str:
+    return json.dumps({"values": [_ohlcv_row()]})
 
 
 if __name__ == "__main__":

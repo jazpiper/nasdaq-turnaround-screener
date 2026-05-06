@@ -126,6 +126,58 @@ def test_briefing_payload_summarizes_user_tickers_missing_entries_and_top_candid
     assert "technical/research signals only" in payload["notes"][0]
 
 
+def test_briefing_payload_exposes_provider_status_without_raw_sensitive_message() -> None:
+    report = {
+        **sample_daily_report(),
+        "market_data_provider_status": [
+            {
+                "provider": "twelve-data",
+                "role": "primary",
+                "status": "partial_success",
+                "attempted_ticker_count": 100,
+                "successful_ticker_count": 95,
+                "failed_ticker_count": 5,
+                "error_kind": "rate_limited",
+                "rate_limited": True,
+                "retry_count": 2,
+                "used_stale_cache": True,
+                "fallback_provider": "yfinance",
+                "message": "raw token=secret-value should not be copied",
+            }
+        ],
+    }
+
+    payload = build_assistant_briefing_payload(
+        report,
+        user_tickers=["TSLA"],
+        top_candidate_count=0,
+        generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
+    )
+    markdown = build_assistant_briefing_markdown(payload)
+
+    statuses = payload["data_quality"]["market_data_provider_status"]
+    assert statuses == [
+        {
+            "attempted_ticker_count": 100,
+            "error_kind": "rate_limited",
+            "failed_ticker_count": 5,
+            "fallback_provider": "yfinance",
+            "provider": "twelve-data",
+            "rate_limited": True,
+            "retry_count": 2,
+            "role": "primary",
+            "status": "partial_success",
+            "successful_ticker_count": 95,
+            "used_stale_cache": True,
+        }
+    ]
+    assert "primary=twelve-data" in markdown
+    assert "fallback=yfinance" in markdown
+    assert "error=rate_limited" in markdown
+    assert "secret-value" not in json.dumps(payload)
+    assert "raw token" not in markdown
+
+
 def test_markdown_briefing_includes_required_sections_and_caution() -> None:
     payload = build_assistant_briefing_payload(
         sample_daily_report(),

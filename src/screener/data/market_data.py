@@ -3,11 +3,24 @@ from __future__ import annotations
 import ipaddress
 import json
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Iterable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
+from urllib.error import HTTPError
 from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
+
+from screener.data.resilience import (
+    DEFAULT_RESILIENCE_STATE,
+    MarketDataRateLimitError,
+    ProviderResilienceState,
+    build_source_status,
+    classify_provider_error,
+    normalize_ticker_list,
+    retry_with_backoff,
+    sanitize_provider_message,
+)
 
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
 
@@ -28,6 +41,7 @@ class DailyBar:
 class FetchResult:
     bars_by_ticker: dict[str, list[DailyBar]]
     failed_tickers: dict[str, str]
+    source_statuses: list[dict[str, object]] = field(default_factory=list)
 
 
 class HttpResponseReader(Protocol):
@@ -81,8 +95,28 @@ def _read_url(url: str) -> str:
             "Accept": "application/json,text/plain,*/*",
         },
     )
-    with urlopen(request, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS) as response:  # pragma: no cover, exercised via injected reader in tests
-        return response.read().decode("utf-8")
+    try:
+        with urlopen(request, timeout=DEFAULT_HTTP_TIMEOUT_SECONDS) as response:  # pragma: no cover, exercised via injected reader in tests
+            return response.read().decode("utf-8")
+    except HTTPError as exc:  # pragma: no cover, covered via direct fake in tests when practical
+        if exc.code == 429:
+            raise MarketDataRateLimitError(
+                "HTTP 429 rate limited",
+                retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After") if exc.headers else None),
+            ) from exc
+        raise MarketDataProviderError(f"HTTP provider_error status={exc.code}") from exc
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    if seconds < 0:
+        return None
+    return seconds
 
 
 _CANONICAL_FIELD_ALIASES: Mapping[str, tuple[str, ...]] = {
@@ -170,7 +204,14 @@ class YFinanceDailyBarFetcher:
     def fetch(self, tickers: Iterable[str]) -> FetchResult:
         ticker_list = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
         if not ticker_list:
-            return FetchResult(bars_by_ticker={}, failed_tickers={})
+            status = build_source_status(
+                provider=self.provider_name,
+                role="primary",
+                attempted=0,
+                successful=0,
+                failed=0,
+            ).as_dict()
+            return FetchResult(bars_by_ticker={}, failed_tickers={}, source_statuses=[status])
 
         try:
             import yfinance as yf
@@ -199,9 +240,17 @@ class YFinanceDailyBarFetcher:
                     raise ValueError("No price rows returned")
                 bars_by_ticker[ticker] = bars
             except Exception as exc:
-                failed_tickers[ticker] = str(exc)
+                failed_tickers[ticker] = sanitize_provider_message(exc)
 
-        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers)
+        status = build_source_status(
+            provider=self.provider_name,
+            role="primary",
+            attempted=len(ticker_list),
+            successful=len(bars_by_ticker),
+            failed=len(failed_tickers),
+            message=next(iter(failed_tickers.values()), None),
+        ).as_dict()
+        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
 
 
 class TwelveDataDailyBarFetcher:
@@ -217,32 +266,101 @@ class TwelveDataDailyBarFetcher:
         outputsize: int = 120,
         base_url: str = "https://api.twelvedata.com/time_series",
         response_reader: HttpResponseReader | None = None,
+        max_retries: int = 2,
+        initial_backoff_seconds: float = 1.0,
+        max_backoff_seconds: float = 5.0,
+        cooldown_seconds: float = 120.0,
+        cache_ttl_seconds: float = 300.0,
+        stale_cache_ttl_seconds: float = 1800.0,
+        sleeper: Callable[[float], None] | None = None,
+        resilience_state: ProviderResilienceState | None = None,
     ) -> None:
         self.api_key = api_key or os.getenv("TWELVE_DATA_API_KEY")
         self.interval = interval
         self.outputsize = outputsize
         self.base_url = _validate_twelve_data_base_url(base_url)
         self.response_reader = response_reader or _read_url
+        self.max_retries = max_retries
+        self.initial_backoff_seconds = initial_backoff_seconds
+        self.max_backoff_seconds = max_backoff_seconds
+        self.cooldown_seconds = cooldown_seconds
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.stale_cache_ttl_seconds = stale_cache_ttl_seconds
+        self.sleeper = sleeper or time.sleep
+        self.resilience_state = resilience_state or DEFAULT_RESILIENCE_STATE
 
     def fetch(self, tickers: Iterable[str]) -> FetchResult:
         if not self.api_key:
             raise MarketDataProviderError("Twelve Data API key is required")
 
+        ticker_list = normalize_ticker_list(tickers)
         bars_by_ticker: dict[str, list[DailyBar]] = {}
         failed_tickers: dict[str, str] = {}
+        retry_count = 0
+        used_cache = False
+        used_stale_cache = False
+        cooldown_active = False
 
-        for ticker in [ticker.strip().upper() for ticker in tickers if ticker.strip()]:
+        for ticker in ticker_list:
+            cache_key = self._cache_key(ticker)
+            cooldown_key = self._cooldown_key()
+            cached_bars, stale = self.resilience_state.get_cache(
+                cache_key,
+                ttl_seconds=self.cache_ttl_seconds,
+                stale_ttl_seconds=self.stale_cache_ttl_seconds,
+            )
+            if cached_bars is not None and not stale:
+                bars_by_ticker[ticker] = list(cached_bars)
+                used_cache = True
+                continue
+            if self.resilience_state.is_cooling_down(cooldown_key):
+                cooldown_active = True
+                if cached_bars is not None:
+                    bars_by_ticker[ticker] = list(cached_bars)
+                    used_cache = True
+                    used_stale_cache = True
+                else:
+                    failed_tickers[ticker] = "rate_limited: provider cooldown active"
+                continue
             try:
-                bars = self._fetch_ticker(ticker)
+                bars, attempts = retry_with_backoff(
+                    lambda ticker=ticker: self._fetch_ticker_once(ticker),
+                    max_retries=self.max_retries,
+                    initial_backoff_seconds=self.initial_backoff_seconds,
+                    max_backoff_seconds=self.max_backoff_seconds,
+                    sleeper=self.sleeper,
+                )
+                retry_count += attempts
                 if not bars:
                     raise ValueError("No price rows returned")
                 bars_by_ticker[ticker] = bars
+                self.resilience_state.set_cache(cache_key, list(bars))
             except Exception as exc:
-                failed_tickers[ticker] = str(exc)
+                message = sanitize_provider_message(exc)
+                failed_tickers[ticker] = message
+                if classify_provider_error(message) == "rate_limited":
+                    self.resilience_state.start_cooldown(cooldown_key, self.cooldown_seconds)
+                    if cached_bars is not None:
+                        bars_by_ticker[ticker] = list(cached_bars)
+                        failed_tickers.pop(ticker, None)
+                        used_cache = True
+                        used_stale_cache = True
 
-        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers)
+        status = build_source_status(
+            provider=self.provider_name,
+            role="primary",
+            attempted=len(ticker_list),
+            successful=len(bars_by_ticker),
+            failed=len(failed_tickers),
+            retry_count=retry_count,
+            used_cache=used_cache,
+            used_stale_cache=used_stale_cache,
+            cooldown_active=cooldown_active,
+            message=next(iter(failed_tickers.values()), None),
+        ).as_dict()
+        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
 
-    def _fetch_ticker(self, ticker: str) -> list[DailyBar]:
+    def _fetch_ticker_once(self, ticker: str) -> list[DailyBar]:
         params = urlencode(
             {
                 "symbol": ticker,
@@ -254,13 +372,100 @@ class TwelveDataDailyBarFetcher:
         )
         payload = json.loads(self.response_reader(f"{self.base_url}?{params}"))
         if "status" in payload and payload["status"] == "error":
-            raise MarketDataProviderError(payload.get("message", "Twelve Data request failed"))
+            message = sanitize_provider_message(payload.get("message", "Twelve Data request failed"))
+            if classify_provider_error(message) == "rate_limited":
+                raise MarketDataRateLimitError(message)
+            raise MarketDataProviderError(message)
 
         values = payload.get("values")
         if not isinstance(values, list):
-            raise MarketDataProviderError(payload.get("message", "Twelve Data response did not include OHLCV values"))
+            message = sanitize_provider_message(payload.get("message", "Twelve Data response did not include OHLCV values"))
+            if classify_provider_error(message) == "rate_limited":
+                raise MarketDataRateLimitError(message)
+            raise MarketDataProviderError(message)
 
         return normalize_ohlcv_rows(ticker, values)
+
+    def _fetch_ticker(self, ticker: str) -> list[DailyBar]:
+        return self._fetch_ticker_once(ticker)
+
+    def _cache_key(self, ticker: str) -> tuple[object, ...]:
+        return (self.provider_name, self.base_url, self.interval, self.outputsize, ticker)
+
+    def _cooldown_key(self) -> tuple[object, ...]:
+        return (self.provider_name, self.base_url, self.interval)
+
+
+class ResilientMarketDataFetcher:
+    """Try providers in order and keep per-source status instead of hiding partial failures."""
+
+    provider_name = "resilient"
+
+    def __init__(self, providers: list[tuple[str, MarketDataFetcher]]) -> None:
+        if not providers:
+            raise MarketDataProviderError("At least one market data provider is required")
+        self.providers = providers
+
+    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+        remaining = normalize_ticker_list(tickers)
+        bars_by_ticker: dict[str, list[DailyBar]] = {}
+        final_failures: dict[str, str] = {}
+        source_statuses: list[dict[str, object]] = []
+
+        for index, (provider_name, fetcher) in enumerate(self.providers):
+            if not remaining:
+                break
+            role = "primary" if index == 0 else "fallback"
+            attempted = list(remaining)
+            try:
+                result = fetcher.fetch(attempted)
+            except Exception as exc:
+                message = sanitize_provider_message(exc)
+                result = FetchResult(
+                    bars_by_ticker={},
+                    failed_tickers={ticker: message for ticker in attempted},
+                    source_statuses=[
+                        build_source_status(
+                            provider=provider_name,
+                            role=role,
+                            attempted=len(attempted),
+                            successful=0,
+                            failed=len(attempted),
+                            message=message,
+                        ).as_dict()
+                    ],
+                )
+
+            bars_by_ticker.update(result.bars_by_ticker)
+            final_failures = {
+                ticker: sanitize_provider_message(message)
+                for ticker, message in result.failed_tickers.items()
+                if ticker not in bars_by_ticker
+            }
+            source_statuses.extend(
+                _with_status_role(status, provider_name=provider_name, role=role)
+                for status in result.source_statuses
+            )
+            remaining = [ticker for ticker in attempted if ticker not in bars_by_ticker]
+
+        if len(self.providers) > 1 and source_statuses:
+            fallback_names = [name for name, _ in self.providers[1:]]
+            source_statuses = [
+                {**status, "fallback_provider": fallback_names[0]}
+                if status.get("role") == "primary" and fallback_names
+                else status
+                for status in source_statuses
+            ]
+        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=final_failures, source_statuses=source_statuses)
+
+
+def _with_status_role(status: dict[str, object], *, provider_name: str, role: str) -> dict[str, object]:
+    payload = dict(status)
+    payload["provider"] = str(payload.get("provider") or provider_name)
+    payload["role"] = role
+    if payload.get("message"):
+        payload["message"] = sanitize_provider_message(payload["message"])
+    return payload
 
 
 def build_market_data_fetcher(
@@ -269,10 +474,42 @@ def build_market_data_fetcher(
     twelve_data_api_key: str | None = None,
     twelve_data_base_url: str = "https://api.twelvedata.com/time_series",
 ) -> MarketDataFetcher:
+    provider_names = [name.strip().lower() for name in provider.split(",") if name.strip()]
+    if not provider_names:
+        raise MarketDataProviderError("Market data provider cannot be blank")
+
+    built_providers = [
+        (_canonical_provider_name(provider_name), _build_single_market_data_fetcher(
+            provider_name,
+            twelve_data_api_key=twelve_data_api_key,
+            twelve_data_base_url=twelve_data_base_url,
+        ))
+        for provider_name in provider_names
+    ]
+    if len(built_providers) == 1:
+        return built_providers[0][1]
+    return ResilientMarketDataFetcher(built_providers)
+
+
+def _canonical_provider_name(provider: str) -> str:
     normalized_provider = provider.strip().lower()
     if normalized_provider in {"yfinance", "yf"}:
-        return YFinanceDailyBarFetcher()
+        return "yfinance"
     if normalized_provider in {"twelve-data", "twelvedata", "twelve_data"}:
+        return "twelve-data"
+    raise MarketDataProviderError(f"Unsupported market data provider: {provider}")
+
+
+def _build_single_market_data_fetcher(
+    provider: str,
+    *,
+    twelve_data_api_key: str | None,
+    twelve_data_base_url: str,
+) -> MarketDataFetcher:
+    canonical_provider = _canonical_provider_name(provider)
+    if canonical_provider == "yfinance":
+        return YFinanceDailyBarFetcher()
+    if canonical_provider == "twelve-data":
         return TwelveDataDailyBarFetcher(
             api_key=twelve_data_api_key,
             base_url=twelve_data_base_url,

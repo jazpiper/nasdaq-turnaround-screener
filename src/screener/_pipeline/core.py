@@ -123,6 +123,7 @@ class ScreenPipeline:
                 notes.append(f"Benchmark context unavailable: {exc}")
 
         provider_failures = getattr(self.market_data_provider, "failures", {})
+        provider_status = _safe_provider_status(getattr(self.market_data_provider, "provider_status", []))
         if isinstance(provider_failures, dict):
             failures.extend(f"{ticker}: {message}" for ticker, message in provider_failures.items())
 
@@ -175,6 +176,7 @@ class ScreenPipeline:
                 insufficient_history_count=insufficient_history_count,
                 planned_tickers=planned_tickers,
                 data_failures=failures,
+                market_data_provider_status=provider_status,
                 notes=notes,
             ),
             candidates=candidates,
@@ -236,6 +238,32 @@ class ScreenPipeline:
             alert_events_path=run_alert_path,
             stable_alert_events_path=stable_alert_path,
         )
+
+
+def _safe_provider_status(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    statuses: list[dict[str, object]] = []
+    allowed_keys = {
+        "provider",
+        "role",
+        "status",
+        "attempted_ticker_count",
+        "successful_ticker_count",
+        "failed_ticker_count",
+        "error_kind",
+        "rate_limited",
+        "retry_count",
+        "used_cache",
+        "used_stale_cache",
+        "cooldown_active",
+        "fallback_provider",
+        "message",
+    }
+    for item in value:
+        if isinstance(item, dict):
+            statuses.append({str(key): item[key] for key in allowed_keys if key in item})
+    return statuses
 
 
 def build_context(

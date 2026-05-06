@@ -33,7 +33,9 @@ daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-
 - ticker list는 comma-separated 입력을 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 옵션을 주지 않으면 기존 NASDAQ-100 기본 동작과 output schema가 유지됩니다.
 - `scripts/run_daily.py`는 custom tickers와 기본 `--output-root` 생략 조합에서 root를 `output/daily-user-watchlist`처럼 universe별로 분리해 `output/daily/latest`와 alert-state 간섭을 피합니다. 명시적으로 같은 `--output-root`를 주면 그 값을 따릅니다.
 - raw `screener run --tickers ... --output-dir ...`는 latest pointer를 갱신하지 않으므로, cron 소비 경로와 분리된 output dir을 직접 지정하는 편이 안전합니다.
-- `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers` 가 함께 기록됩니다.
+- `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers`, `market_data_provider_status` 가 함께 기록됩니다.
+  - `market_data_provider_status` 는 source/provider별 `role`(`primary`/`fallback`), `status`(`ok`/`partial_success`/`rate_limited`/`failed`), ticker 성공/실패 count, `retry_count`, `used_cache`, `used_stale_cache`, `cooldown_active`, `fallback_provider`, 분류된 `error_kind`만 남깁니다.
+  - raw URL, query string, API key, token, credential 원문은 provider status나 report에 기록하지 않습니다.
 - daily run은 `daily-report.json` 옆에 `alert-events.json` 도 함께 생성합니다.
 - OpenClaw는 daily consumer entrypoint로 `output/daily/latest/alert-events.json` 을 읽으면 됩니다.
 - earnings calendar 또는 benchmark context fetch가 실패하면 run은 계속 진행하고, 사유는 `run-metadata.json` / `daily-report.json` 의 `notes` 에 남깁니다.
@@ -58,6 +60,7 @@ uv run python -m screener.cli.main build-assistant-briefing \
 - `--artifact-basename latest-user-watchlist-screener`를 주면 기본 artifact를 덮어쓰지 않고 `latest-user-watchlist-screener.json` / `.md`를 씁니다.
 - custom watchlist daily report에서 planned ticker가 data provider 실패(`data_failures`)로 빠진 경우, assistant briefing은 해당 ticker를 outside-universe가 아니라 `data_failure`로 표시합니다.
 - 이 compact artifact는 personal assistant가 daily report 전체 schema를 직접 해석하지 않고 user tickers, missing/outside-universe tickers, top candidates, data-quality summary만 읽도록 만든 안정 진입점입니다.
+- assistant briefing의 Data quality 섹션은 daily report에 `market_data_provider_status`가 있으면 market data source 라벨, fallback, partial success, stale cache, classified error를 함께 표시합니다.
 - `--dry-run` 은 source report를 읽고 briefing을 구성하지만 artifact를 쓰지 않습니다.
 - 모든 신호는 technical/research 기반 decision-support 용도이며 buy/sell advice가 아닙니다.
 
@@ -142,7 +145,7 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 주의: 자동 적용 없음. 사람이 `tuning-diff.md` 를 검토하고 `--write` 를 명시적으로 실행해야 합니다.
 
 ## 7. Environment and Secrets
-- `SCREENER_MARKET_DATA_PROVIDER`: daily provider override (`yfinance`, `twelve-data`)
+- `SCREENER_MARKET_DATA_PROVIDER`: daily provider override (`yfinance`, `twelve-data`, 또는 `twelve-data,yfinance` 같은 comma-separated fallback chain)
 - `TWELVE_DATA_API_KEY`: Twelve Data API key
 - `TWELVE_DATA_BASE_URL`: Twelve Data endpoint override. API key가 query string으로 붙으므로 public routable `http(s)` endpoint만 허용되며, localhost/private IP/userinfo URL은 거부됩니다.
 - `SCREENER_EARNINGS_CALENDAR_PATH`: earnings calendar JSON path
@@ -203,6 +206,7 @@ env PYTHONPATH={project_root}/src {python} -m screener.cli.main collect-window -
 
 ## 11. Exit and Failure Handling
 - 일부 ticker fetch 실패는 metadata에 남기고 run 전체는 계속 진행합니다.
+- daily market data fetch는 provider별 짧은 in-process cache/cooldown과 429 전용 retry/backoff를 적용합니다. `SCREENER_MARKET_DATA_PROVIDER=twelve-data,yfinance`처럼 fallback chain을 쓰면 primary 실패 ticker만 fallback provider에 넘기고 source별 상태를 숨기지 않습니다.
 - Twelve Data가 일일 크레딧 소진(`run out of API credits for the day` 류) 응답을 주면, 해당 slot의 추가 ticker 호출을 즉시 중단하고 이후 planned ticker는 미시도 상태로 metadata에 남깁니다.
 - metadata에서는 실제 호출 후 실패한 ticker는 `failures` 에 남기고, 아직 호출하지 못한 ticker는 `skipped_due_to_credit_exhaustion` 으로 별도 분리합니다.
 - 위 크레딧 소진은 현재 구현상 process crash로 취급하지 않습니다. `collect-window` 는 artifact와 failure metadata를 남기고 종료하며, non-zero exit는 설정 오류나 Oracle persistence 실패 같은 시스템 오류에 주로 사용합니다.

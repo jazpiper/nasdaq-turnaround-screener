@@ -111,9 +111,15 @@ def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
         "",
         "## Data quality",
     ]
-    data_quality = payload.get("data_quality", {})
+    raw_data_quality = payload.get("data_quality", {})
+    data_quality = dict(raw_data_quality) if isinstance(raw_data_quality, dict) else {}
+    provider_statuses = list(data_quality.pop("market_data_provider_status", []))
     for key, value in data_quality.items():
         lines.append(f"- {key}: {value}")
+    if provider_statuses:
+        lines.append("")
+        lines.append("### Market data sources")
+        lines.extend(f"- {_format_provider_status(status)}" for status in provider_statuses)
 
     lines.extend(["", "## User holdings/watchlist technical signal summary"])
     for item in payload.get("user_tickers", []):
@@ -207,7 +213,59 @@ def _build_data_quality(daily_report: dict[str, Any]) -> dict[str, Any]:
         "insufficient_history_count",
         "candidate_count",
     ]
-    return {key: daily_report.get(key, 0) for key in keys}
+    data_quality = {key: daily_report.get(key, 0) for key in keys}
+    provider_statuses = _sanitize_provider_statuses(daily_report.get("market_data_provider_status", []))
+    if provider_statuses:
+        data_quality["market_data_provider_status"] = provider_statuses
+    return data_quality
+
+
+def _sanitize_provider_statuses(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    allowed_keys = {
+        "provider",
+        "role",
+        "status",
+        "attempted_ticker_count",
+        "successful_ticker_count",
+        "failed_ticker_count",
+        "error_kind",
+        "rate_limited",
+        "retry_count",
+        "used_cache",
+        "used_stale_cache",
+        "cooldown_active",
+        "fallback_provider",
+    }
+    sanitized: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        sanitized.append({key: item.get(key) for key in sorted(allowed_keys) if key in item})
+    return sanitized
+
+
+def _format_provider_status(status: Any) -> str:
+    if not isinstance(status, dict):
+        return "unknown source: unknown"
+    provider = str(status.get("provider") or "unknown")
+    role = str(status.get("role") or "source")
+    state = str(status.get("status") or "unknown")
+    attempted = status.get("attempted_ticker_count", "n/a")
+    successful = status.get("successful_ticker_count", "n/a")
+    parts = [f"{role}={provider}", f"status={state}", f"tickers={successful}/{attempted}"]
+    if status.get("fallback_provider"):
+        parts.append(f"fallback={status['fallback_provider']}")
+    if status.get("rate_limited"):
+        parts.append("rate_limited=true")
+    if status.get("used_stale_cache"):
+        parts.append("cache=stale")
+    elif status.get("used_cache"):
+        parts.append("cache=hit")
+    if status.get("error_kind"):
+        parts.append(f"error={status['error_kind']}")
+    return " | ".join(parts)
 
 
 def _parse_data_failures(data_failures: Any) -> dict[str, str]:

@@ -9,10 +9,18 @@ from .market_data import (
     FetchResult,
     MarketDataFetcher,
     MarketDataProviderError,
+    ResilientMarketDataFetcher,
     TwelveDataDailyBarFetcher,
     YFinanceDailyBarFetcher,
     build_market_data_fetcher,
     normalize_ohlcv_rows,
+)
+from .resilience import (
+    MarketDataRateLimitError,
+    ProviderResilienceState,
+    build_source_status,
+    classify_provider_error,
+    sanitize_provider_message,
 )
 
 __all__ = [
@@ -24,8 +32,14 @@ __all__ = [
     "FileBackedEarningsCalendarProvider",
     "MarketDataFetcher",
     "MarketDataProviderError",
+    "MarketDataRateLimitError",
+    "ProviderResilienceState",
+    "ResilientMarketDataFetcher",
     "TwelveDataDailyBarFetcher",
     "YFinanceDailyBarFetcher",
     "build_market_data_fetcher",
+    "build_source_status",
+    "classify_provider_error",
     "normalize_ohlcv_rows",
+    "sanitize_provider_message",
 ]
