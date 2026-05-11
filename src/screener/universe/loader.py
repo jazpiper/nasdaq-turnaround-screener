@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 from .nasdaq100 import NASDAQ_100_TICKERS
@@ -58,3 +60,52 @@ def load_static_universe(
         normalized.append(value)
         seen.add(value)
     return UniverseDefinition(name=name, tickers=tuple(normalized))
+
+
+def load_ticker_source_file(path: str | Path, *, deduplicate: bool = True) -> tuple[str, ...]:
+    source_path = Path(path).expanduser()
+    text = source_path.read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"Ticker source file is empty: {source_path}")
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return parse_ticker_list(text.replace("\n", ","))
+
+    if isinstance(payload, dict):
+        if "tickers" not in payload:
+            raise ValueError(f"Ticker source JSON must include a 'tickers' key: {source_path}")
+        payload = payload["tickers"]
+
+    if isinstance(payload, str):
+        return parse_ticker_list(payload)
+
+    if not isinstance(payload, list):
+        raise ValueError(f"Ticker source JSON must be a list or object with tickers: {source_path}")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in payload:
+        ticker_value: str | None
+        if isinstance(item, str):
+            ticker_value = item
+        elif isinstance(item, dict):
+            raw_ticker = item.get("ticker")
+            ticker_value = None if raw_ticker is None else str(raw_ticker)
+        else:
+            continue
+
+        try:
+            ticker = normalize_ticker(ticker_value)
+        except ValueError:
+            continue
+
+        if deduplicate and ticker in seen:
+            continue
+        normalized.append(ticker)
+        seen.add(ticker)
+
+    if not normalized:
+        raise ValueError(f"No tickers found in source file: {source_path}")
+    return tuple(normalized)

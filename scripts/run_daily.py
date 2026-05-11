@@ -51,6 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persist-oracle-sql", action="store_true", help="Write successful daily run results to Oracle SQL.")
     parser.add_argument("--universe-name", default=None, help="Name to record for a custom ticker universe.")
     parser.add_argument("--tickers", "--universe-tickers", dest="universe_tickers", default=None, help="Comma-separated tickers for a custom screener universe.")
+    parser.add_argument("--overlay-tickers", default=None, help="Comma-separated hot-sector overlay tickers to append to the core universe.")
+    parser.add_argument("--overlay-file", type=Path, default=None, help="File containing overlay tickers as JSON, CSV, or newline-separated text.")
+    parser.add_argument("--overlay-name", default=None, help="Label used when naming outputs for an overlay-backed universe.")
     return parser.parse_args()
 
 
@@ -96,12 +99,19 @@ def resolve_output_root(
     *,
     universe_name: str | None = None,
     universe_tickers: str | None = None,
+    overlay_tickers: str | None = None,
+    overlay_file: Path | None = None,
+    overlay_name: str | None = None,
 ) -> Path:
     if output_root is not None:
         return output_root
-    if universe_tickers is None:
+    has_custom_universe = universe_tickers is not None or overlay_tickers is not None or overlay_file is not None
+    if not has_custom_universe:
         return DEFAULT_OUTPUT_ROOT
-    suffix = _safe_output_root_suffix(universe_name or DEFAULT_CUSTOM_UNIVERSE_NAME)
+    suffix_base = universe_name or DEFAULT_CUSTOM_UNIVERSE_NAME
+    if overlay_tickers is not None or overlay_file is not None:
+        suffix_base = f"{suffix_base}-{overlay_name or (overlay_file.stem if overlay_file is not None else 'hot-sector-overlay')}"
+    suffix = _safe_output_root_suffix(suffix_base)
     return DEFAULT_OUTPUT_ROOT.with_name(f"{DEFAULT_OUTPUT_ROOT.name}-{suffix}")
 
 
@@ -149,6 +159,9 @@ def run_screener(
     persist_oracle_sql: bool,
     universe_name: str | None = None,
     universe_tickers: str | None = None,
+    overlay_tickers: str | None = None,
+    overlay_file: Path | None = None,
+    overlay_name: str | None = None,
 ) -> int:
     command = [
         str(python_path),
@@ -172,6 +185,12 @@ def run_screener(
         command.extend(["--universe-name", universe_name])
     if universe_tickers is not None:
         command.extend(["--tickers", universe_tickers])
+    if overlay_tickers is not None:
+        command.extend(["--overlay-tickers", overlay_tickers])
+    if overlay_file is not None:
+        command.extend(["--overlay-file", str(overlay_file)])
+    if overlay_name is not None:
+        command.extend(["--overlay-name", overlay_name])
 
     completed = subprocess.run(command, cwd=root)
     return completed.returncode
@@ -186,6 +205,9 @@ def main() -> int:
             args.output_root,
             universe_name=args.universe_name,
             universe_tickers=args.universe_tickers,
+            overlay_tickers=args.overlay_tickers,
+            overlay_file=args.overlay_file,
+            overlay_name=args.overlay_name,
         )
     ).resolve()
     output_dir = dated_output_dir(output_root, args.run_date)
@@ -202,6 +224,9 @@ def main() -> int:
         args.persist_oracle_sql,
         args.universe_name,
         args.universe_tickers,
+        args.overlay_tickers,
+        args.overlay_file,
+        args.overlay_name,
     )
     if exit_code != 0:
         return exit_code

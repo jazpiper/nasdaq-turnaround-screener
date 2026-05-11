@@ -52,6 +52,15 @@ def test_resolve_output_root_separates_custom_watchlist_default() -> None:
     ) == Path("output/daily-user-watchlist")
 
 
+def test_resolve_output_root_separates_overlay_backed_universe() -> None:
+    assert resolve_output_root(
+        None,
+        universe_name="NASDAQ-100",
+        overlay_tickers="NVDA,AMD,AVGO",
+        overlay_name="hot-sector-overlay",
+    ) == Path("output/daily-nasdaq-100-hot-sector-overlay")
+
+
 def test_resolve_output_root_preserves_explicit_root_for_custom_watchlist() -> None:
     assert resolve_output_root(
         Path("output/daily"),
@@ -137,6 +146,9 @@ def test_run_screener_passes_custom_universe_args(monkeypatch, tmp_path: Path) -
         persist_oracle_sql=False,
         universe_name="user-watchlist",
         universe_tickers="TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA",
+        overlay_tickers="NVDA,AMD,AVGO",
+        overlay_file=tmp_path / "hot-sector-overlay.json",
+        overlay_name="hot-sector-overlay",
     )
 
     assert exit_code == 0
@@ -155,6 +167,12 @@ def test_run_screener_passes_custom_universe_args(monkeypatch, tmp_path: Path) -
                 "user-watchlist",
                 "--tickers",
                 "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA",
+                "--overlay-tickers",
+                "NVDA,AMD,AVGO",
+                "--overlay-file",
+                str(tmp_path / "hot-sector-overlay.json"),
+                "--overlay-name",
+                "hot-sector-overlay",
             ],
             tmp_path,
         )

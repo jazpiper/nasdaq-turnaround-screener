@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Iterable
 
 import pandas as pd
@@ -15,21 +16,40 @@ from screener.data import (
 from screener.indicators.technicals import add_indicator_columns, latest_weekly_context, rolling_mean
 from screener.intraday_artifacts import discover_latest_intraday_snapshot, merge_history_with_staged_quote
 from screener.models import PipelineContext, TickerInput
-from screener.universe import load_static_universe
+from screener.universe import load_static_universe, load_ticker_source_file
 from screener.universe.nasdaq100_names import NASDAQ_100_COMPANY_NAMES
 
 from .context import _close_improvement_streak, _latest_change, _percent_return
 
 
 class StaticUniverseProvider:
-    def __init__(self, tickers: Iterable[str] | None = None) -> None:
+    def __init__(
+        self,
+        tickers: Iterable[str] | None = None,
+        overlay_tickers: Iterable[str] | None = None,
+        overlay_source: str | Path | None = None,
+    ) -> None:
         self._tickers = tuple(tickers) if tickers is not None else None
+        self._overlay_tickers = tuple(overlay_tickers) if overlay_tickers is not None else None
+        self._overlay_source = Path(overlay_source).expanduser() if overlay_source is not None else None
 
     def load_universe(self, context: PipelineContext) -> list[TickerInput]:
         definition = load_static_universe(tickers=self._tickers, name=context.universe_name)
+        overlay_tickers = self._overlay_tickers
+        if self._overlay_source is not None:
+            overlay_tickers = tuple(load_ticker_source_file(self._overlay_source))
+        if overlay_tickers is not None:
+            overlay_definition = load_static_universe(tickers=overlay_tickers, name=context.universe_name, deduplicate=True)
+            combined_tickers = load_static_universe(
+                tickers=(*definition.tickers, *overlay_definition.tickers),
+                name=context.universe_name,
+                deduplicate=True,
+            ).tickers
+        else:
+            combined_tickers = definition.tickers
         return [
             TickerInput(ticker=ticker, name=NASDAQ_100_COMPANY_NAMES.get(ticker))
-            for ticker in definition.tickers
+            for ticker in combined_tickers
         ]
 
 

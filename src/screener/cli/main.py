@@ -23,7 +23,7 @@ from screener.reporting.assistant_briefing import (
 from screener.storage import OracleSqlStorage, OracleSqlStorageError
 from screener.storage.files import ensure_directory
 from screener.tuning import TierThresholdsGrid, tune_single_window, walk_forward
-from screener.universe import USER_WATCHLIST_UNIVERSE_NAME, parse_ticker_list
+from screener.universe import USER_WATCHLIST_UNIVERSE_NAME, load_ticker_source_file, parse_ticker_list
 from screener.tuning.report import (
     write_diff_markdown,
     write_diff_markdown_from_walkforward,
@@ -76,8 +76,12 @@ def run(
     persist_oracle_sql: bool = typer.Option(False, "--persist-oracle-sql", help="Write successful run results to Oracle SQL."),
     universe_name: str | None = typer.Option(None, "--universe-name", help="Name to record for a custom ticker universe. Defaults to user-watchlist when --tickers is provided."),
     universe_tickers: str | None = typer.Option(None, "--tickers", "--universe-tickers", help="Comma-separated tickers for a custom screener universe."),
+    overlay_tickers: str | None = typer.Option(None, "--overlay-tickers", help="Comma-separated hot-sector overlay tickers to append to the core universe."),
+    overlay_file: Path | None = typer.Option(None, "--overlay-file", help="File containing overlay tickers as JSON, CSV, or newline-separated text."),
+    overlay_name: str | None = typer.Option(None, "--overlay-name", help="Label used when naming outputs for an overlay-backed universe."),
 ) -> None:
     settings = get_settings(output_dir=output_dir)
+    overlay_ticker_values: tuple[str, ...] | None = None
     if universe_tickers is not None:
         try:
             settings.universe_tickers = parse_ticker_list(universe_tickers)
@@ -89,6 +93,23 @@ def run(
             "--universe-name requires --tickers/--universe-tickers.",
             param_hint="--universe-name",
         )
+
+    if overlay_tickers is not None:
+        try:
+            overlay_ticker_values = parse_ticker_list(overlay_tickers)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc), param_hint="--overlay-tickers") from exc
+    if overlay_file is not None:
+        try:
+            overlay_ticker_values = load_ticker_source_file(overlay_file)
+        except (OSError, ValueError) as exc:
+            raise typer.BadParameter(str(exc), param_hint="--overlay-file") from exc
+    if overlay_ticker_values is not None:
+        settings.universe_overlay_tickers = overlay_ticker_values
+        settings.universe_overlay_source = overlay_file
+        settings.universe_overlay_name = (overlay_name or (overlay_file.stem if overlay_file is not None else "hot-sector-overlay")).strip() or "hot-sector-overlay"
+        base_name = (universe_name or settings.universe_name).strip() or settings.universe_name
+        settings.universe_name = f"{base_name}+{settings.universe_overlay_name}"
     if use_staged_intraday:
         settings.daily_intraday_source_mode = "prefer-staged"
     if intraday_output_root is not None:

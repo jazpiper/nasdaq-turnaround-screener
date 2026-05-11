@@ -171,7 +171,7 @@ def test_briefing_payload_exposes_provider_status_without_raw_sensitive_message(
             "used_stale_cache": True,
         }
     ]
-    assert "primary=twelve-data" in markdown
+    assert "**primary twelve-data**" in markdown
     assert "fallback=yfinance" in markdown
     assert "error=rate_limited" in markdown
     assert "secret-value" not in json.dumps(payload)
@@ -190,10 +190,10 @@ def test_markdown_briefing_includes_required_sections_and_caution() -> None:
 
     assert "# NASDAQ Screener Assistant Briefing (2026-05-01)" in markdown
     assert "## Data quality" in markdown
-    assert "planned_ticker_count: 100" in markdown
+    assert "**Planned ticker count**: 100" in markdown
     assert "## User holdings/watchlist technical signal summary" in markdown
-    assert "TSLA: not a candidate" in markdown
-    assert "PLTR: candidate rank 2" in markdown
+    assert "- **TSLA**: not a candidate" in markdown
+    assert "- **PLTR**: candidate rank 2" in markdown
     assert "## Missing tickers / outside universe" in markdown
     assert "INFQ: Not in source screener universe" in markdown
     assert "## Top NASDAQ-100 turnaround candidates" in markdown

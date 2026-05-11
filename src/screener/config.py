@@ -20,6 +20,9 @@ class Settings:
     project_name: str = "nasdaq-turnaround-screener"
     universe_name: str = "NASDAQ-100"
     universe_tickers: tuple[str, ...] | None = None
+    universe_overlay_tickers: tuple[str, ...] | None = None
+    universe_overlay_source: Path | None = None
+    universe_overlay_name: str | None = None
     output_dir: Path = Path("output")
     markdown_report_name: str = "daily-report.md"
     json_report_name: str = "daily-report.json"

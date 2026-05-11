@@ -139,6 +139,24 @@ def test_static_universe_provider_loads_custom_watchlist() -> None:
     assert tickers[1].name is None
 
 
+def test_static_universe_provider_appends_overlay_file_tickers(tmp_path: Path) -> None:
+    overlay_file = tmp_path / "hot-sector-overlay.json"
+    overlay_file.write_text(
+        '{"tickers": ["nvda", "amd", {"ticker": "avgo"}, "amd", "msft"]}',
+        encoding="utf-8",
+    )
+    context = build_context(run_date=date(2026, 5, 1), dry_run=True, universe_name="NASDAQ-100")
+
+    tickers = StaticUniverseProvider(
+        tickers=("aapl", "msft"),
+        overlay_source=overlay_file,
+    ).load_universe(context)
+
+    assert [item.ticker for item in tickers] == ["AAPL", "MSFT", "NVDA", "AMD", "AVGO"]
+    assert tickers[2].name == "NVIDIA Corporation"
+    assert tickers[4].name == "Broadcom Inc."
+
+
 class _NoCandidateScorer:
     def evaluate(self, ticker, indicators, context):
         return None

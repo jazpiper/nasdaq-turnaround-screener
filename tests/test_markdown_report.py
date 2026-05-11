@@ -32,5 +32,5 @@ def test_markdown_report_includes_risk_adjusted_score() -> None:
 
     report = build_markdown_report(result)
 
-    assert "- score: 65" in report
-    assert "- risk_adjusted_score: 62" in report
+    assert "- **Score**: 65" in report
+    assert "- **Risk-adjusted score**: 62" in report

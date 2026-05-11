@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from screener.models import ScreenRunResult
+from screener.models import CandidateResult, ScreenRunResult
 
 
 def build_markdown_report(result: ScreenRunResult) -> str:
@@ -8,10 +8,10 @@ def build_markdown_report(result: ScreenRunResult) -> str:
     lines = [
         f"# NASDAQ Turnaround Screener Report ({metadata.run_date.isoformat()})",
         "",
-        f"- universe: {metadata.universe}",
-        f"- run_mode: {metadata.run_mode}",
-        f"- dry_run: {metadata.dry_run}",
-        f"- candidate_count: {result.candidate_count}",
+        f"- **Universe**: {metadata.universe}",
+        f"- **Run mode**: {metadata.run_mode}",
+        f"- **Dry run**: {metadata.dry_run}",
+        f"- **Candidate count**: {result.candidate_count}",
         "",
     ]
 
@@ -45,33 +45,11 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         lines.append("")
     else:
         for candidate in buy_review_candidates:
-            heading = candidate.ticker if not candidate.name else f"{candidate.ticker} ({candidate.name})"
-            lines.extend(
-                [
-                    f"### {heading}",
-                    f"- score: {candidate.score}",
-                    _risk_adjusted_score_line(candidate.risk_adjusted_score),
-                    f"- tier_reasons: {', '.join(candidate.tier_reasons) if candidate.tier_reasons else 'n/a'}",
-                    f"- reasons: {', '.join(candidate.reasons) if candidate.reasons else 'n/a'}",
-                    f"- risks: {', '.join(candidate.risks) if candidate.risks else 'n/a'}",
-                    "",
-                ]
-            )
+            lines.extend(_format_candidate_block(candidate, include_tier=False))
 
     lines.append("## Candidates")
     for candidate in result.candidates:
-        heading = candidate.ticker if not candidate.name else f"{candidate.ticker} ({candidate.name})"
-        lines.extend(
-            [
-                f"### {heading}",
-                f"- score: {candidate.score}",
-                _risk_adjusted_score_line(candidate.risk_adjusted_score),
-                f"- tier: {candidate.tier}",
-                f"- reasons: {', '.join(candidate.reasons) if candidate.reasons else 'n/a'}",
-                f"- risks: {', '.join(candidate.risks) if candidate.risks else 'n/a'}",
-                "",
-            ]
-        )
+        lines.extend(_format_candidate_block(candidate, include_tier=True))
 
     return "\n".join(lines)
 
@@ -83,7 +61,7 @@ def _provider_status_line(status: dict[str, object]) -> str:
     attempted = status.get("attempted_ticker_count", "n/a")
     successful = status.get("successful_ticker_count", "n/a")
     failed = status.get("failed_ticker_count", "n/a")
-    parts = [f"- {role} {provider}: {state}", f"tickers {successful}/{attempted} ok", f"failed {failed}"]
+    parts = [f"- **{role} {provider}**: {state}", f"tickers {successful}/{attempted} ok", f"failed {failed}"]
     if status.get("fallback_provider"):
         parts.append(f"fallback {status['fallback_provider']}")
     if status.get("rate_limited"):
@@ -101,7 +79,31 @@ def _provider_status_line(status: dict[str, object]) -> str:
     return " | ".join(parts)
 
 
+def _format_candidate_block(candidate: CandidateResult, *, include_tier: bool) -> list[str]:
+    heading = candidate.ticker if not candidate.name else f"{candidate.ticker} ({candidate.name})"
+    lines = [f"### {heading}"]
+    lines.append(f"- **Score**: {candidate.score}")
+    lines.append(_risk_adjusted_score_line(candidate.risk_adjusted_score))
+    if include_tier:
+        lines.append(f"- **Tier**: {candidate.tier}")
+    if candidate.tier_reasons:
+        lines.append("- **Tier reasons**:")
+        lines.extend(f"  - {reason}" for reason in candidate.tier_reasons)
+    if candidate.reasons:
+        lines.append("- **Reasons**:")
+        lines.extend(f"  - {reason}" for reason in candidate.reasons)
+    else:
+        lines.append("- **Reasons**: n/a")
+    if candidate.risks:
+        lines.append("- **Risks**:")
+        lines.extend(f"  - {risk}" for risk in candidate.risks)
+    else:
+        lines.append("- **Risks**: n/a")
+    lines.append("")
+    return lines
+
+
 def _risk_adjusted_score_line(risk_adjusted_score: int | None) -> str:
     if risk_adjusted_score is None:
-        return "- risk_adjusted_score: n/a"
-    return f"- risk_adjusted_score: {risk_adjusted_score}"
+        return "- **Risk-adjusted score**: n/a"
+    return f"- **Risk-adjusted score**: {risk_adjusted_score}"

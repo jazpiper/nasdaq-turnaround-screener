@@ -89,7 +89,11 @@ class ScreenPipeline:
         benchmark_market_data_provider: MarketDataProvider | None = None,
     ) -> None:
         self.settings = settings
-        self.universe_provider = universe_provider or StaticUniverseProvider(tickers=settings.universe_tickers)
+        self.universe_provider = universe_provider or StaticUniverseProvider(
+            tickers=settings.universe_tickers,
+            overlay_tickers=settings.universe_overlay_tickers,
+            overlay_source=settings.universe_overlay_source,
+        )
         self.market_data_provider = market_data_provider or build_market_data_provider(settings)
         self.indicator_engine = indicator_engine or TechnicalIndicatorEngine()
         self.candidate_scorer = candidate_scorer or RankedCandidateScorer()
