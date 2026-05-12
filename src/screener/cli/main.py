@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -248,6 +248,7 @@ def build_assistant_briefing(
         daily_report,
         user_tickers=parse_user_tickers(user_tickers),
         top_candidate_count=top_candidates,
+        generated_at=datetime.now(timezone.utc),
         source_report_path=report_path,
     )
     markdown = build_assistant_briefing_markdown(payload)

@@ -109,7 +109,7 @@ def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
     lines.extend(["", "## Missing tickers / outside universe"])
     missing_items = payload.get("missing_user_tickers", [])
     if missing_items:
-        lines.extend(f"- **{item['ticker']}**: {item['reason']}" for item in missing_items)
+        lines.extend(f"- {item['ticker']}: {item['reason']}" for item in missing_items)
     else:
         lines.append("- None")
 
