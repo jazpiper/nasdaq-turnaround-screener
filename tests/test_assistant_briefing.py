@@ -90,6 +90,19 @@ def test_briefing_payload_summarizes_user_tickers_missing_entries_and_top_candid
         "insufficient_history_count": 0,
         "candidate_count": 2,
     }
+    assert payload["overlay_candidates"] == [
+        {
+            "rank": 1,
+            "ticker": "GEHC",
+            "name": "GE HealthCare Technologies Inc.",
+            "score": 68,
+            "risk_adjusted_score": 53,
+            "tier": "avoid/high-risk",
+            "tier_reasons": ["too many unresolved risk flags"],
+            "reasons": ["BB 하단 근처 또는 재진입 구간"],
+            "risks": ["주봉 추세가 아직 약함"],
+        }
+    ]
 
     user_by_ticker = {item["ticker"]: item for item in payload["user_tickers"]}
     assert user_by_ticker["TSLA"]["in_screener_universe"] is True
@@ -171,9 +184,11 @@ def test_briefing_payload_exposes_provider_status_without_raw_sensitive_message(
             "used_stale_cache": True,
         }
     ]
+    assert payload["data_quality"]["market_data_reliability"] == "partial"
     assert "**primary twelve-data**" in markdown
     assert "fallback=yfinance" in markdown
     assert "error=rate_limited" in markdown
+    assert "Reliability label**: partial" in markdown
     assert "secret-value" not in json.dumps(payload)
     assert "raw token" not in markdown
 
@@ -198,6 +213,7 @@ def test_markdown_briefing_includes_required_sections_and_caution() -> None:
     assert "INFQ: Not in source screener universe" in markdown
     assert "## Top NASDAQ-100 turnaround candidates" in markdown
     assert "GEHC (GE HealthCare Technologies Inc.)" in markdown
+    assert "## Overlay candidates (outside user universe)" in markdown
     assert "not buy/sell advice" in markdown
 
 

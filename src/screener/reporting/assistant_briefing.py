@@ -49,6 +49,7 @@ def build_assistant_briefing_payload(
         "user_tickers": [],
         "missing_user_tickers": [],
         "top_candidates": [],
+        "overlay_candidates": [],
         "notes": [
             "Signals are technical/research signals only and not buy/sell advice.",
         ],
@@ -70,6 +71,11 @@ def build_assistant_briefing_payload(
         candidate = _compact_candidate(row, rank=rank_by_ticker.get(str(row.get("ticker", "")).upper(), 0))
         payload["top_candidates"].append(candidate)
 
+    user_universe = {item.get("ticker") for item in payload["user_tickers"]}
+    payload["overlay_candidates"] = [
+        candidate for candidate in payload["top_candidates"] if candidate.get("ticker") not in user_universe
+    ]
+
     return payload
 
 
@@ -90,6 +96,9 @@ def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
         lines.append("")
         lines.append("### Market data sources")
         lines.extend(f"- {_format_provider_status(status)}" for status in provider_statuses)
+        reliability = payload.get("data_quality", {}).get("market_data_reliability")
+        if reliability:
+            lines.append(f"- **Reliability label**: {reliability}")
 
     lines.extend(["", "## User holdings/watchlist technical signal summary"])
     for item in payload.get("user_tickers", []):
@@ -125,6 +134,13 @@ def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
                 f"- **#{candidate['rank']} {heading}**: score {candidate.get('score')} | "
                 f"risk-adjusted {candidate.get('risk_adjusted_score')} | tier {candidate.get('tier')}"
             )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Overlay candidates (outside user universe)"])
+    overlay_candidates = payload.get("overlay_candidates", [])
+    if overlay_candidates:
+        lines.extend(f"- {candidate.get('ticker')}: rank {candidate.get('rank')}" for candidate in overlay_candidates)
     else:
         lines.append("- None")
 
@@ -188,7 +204,18 @@ def _build_data_quality(daily_report: dict[str, Any]) -> dict[str, Any]:
     provider_statuses = _sanitize_provider_statuses(daily_report.get("market_data_provider_status", []))
     if provider_statuses:
         data_quality["market_data_provider_status"] = provider_statuses
+        data_quality["market_data_reliability"] = _derive_market_data_reliability(provider_statuses)
     return data_quality
+
+
+def _derive_market_data_reliability(provider_statuses: list[dict[str, Any]]) -> str:
+    if any(status.get("status") in {"failed", "rate_limited"} for status in provider_statuses):
+        return "degraded"
+    if any(status.get("status") == "partial_success" for status in provider_statuses):
+        return "partial"
+    if any(status.get("role") == "fallback" and int(status.get("successful_ticker_count") or 0) > 0 for status in provider_statuses):
+        return "fallback_used"
+    return "ok"
 
 
 def _sanitize_provider_statuses(value: Any) -> list[dict[str, Any]]:
