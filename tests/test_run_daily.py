@@ -177,3 +177,46 @@ def test_run_screener_passes_custom_universe_args(monkeypatch, tmp_path: Path) -
             tmp_path,
         )
     ]
+
+
+def test_run_assistant_briefing_passes_custom_universe_args(monkeypatch, tmp_path: Path) -> None:
+    calls: list[tuple[list[str], Path]] = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(command, cwd):
+        calls.append((command, cwd))
+        return Completed()
+
+    monkeypatch.setattr(run_daily.subprocess, "run", fake_run)
+    python_path = tmp_path / ".venv" / "bin" / "python"
+    report_path = tmp_path / "output" / "daily-user-watchlist" / "2026-05-01" / "daily-report.json"
+    assistant_output_dir = tmp_path / "output" / "assistant"
+
+    exit_code = run_daily.run_assistant_briefing(
+        python_path,
+        tmp_path,
+        report_path,
+        assistant_output_dir,
+        "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA",
+    )
+
+    assert exit_code == 0
+    assert calls == [
+        (
+            [
+                str(python_path),
+                "-m",
+                "screener.cli.main",
+                "build-assistant-briefing",
+                "--report-path",
+                str(report_path),
+                "--output-dir",
+                str(assistant_output_dir),
+                "--user-tickers",
+                "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA",
+            ],
+            tmp_path,
+        )
+    ]

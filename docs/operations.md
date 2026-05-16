@@ -32,6 +32,7 @@ daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-
 - `--tickers`/`--universe-tickers`를 명시하면 custom universe가 활성화되고 기본 이름은 `user-watchlist` 입니다. `--universe-name`으로 artifact metadata의 universe 이름을 바꿀 수 있으며, 이 옵션은 custom ticker list와 함께만 허용됩니다.
 - ticker list는 comma-separated 입력을 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 옵션을 주지 않으면 기존 NASDAQ-100 기본 동작과 output schema가 유지됩니다.
 - `scripts/run_daily.py`는 custom tickers와 기본 `--output-root` 생략 조합에서 root를 `output/daily-user-watchlist`처럼 universe별로 분리해 `output/daily/latest`와 alert-state 간섭을 피합니다. 명시적으로 같은 `--output-root`를 주면 그 값을 따릅니다.
+- custom ticker daily run은 성공 시 `output/assistant/latest-user-briefing-screener.{json,md}`도 함께 생성해 holdings/watchlist/big-tech용 compact briefing을 자동으로 갱신합니다.
 - raw `screener run --tickers ... --output-dir ...`는 latest pointer를 갱신하지 않으므로, cron 소비 경로와 분리된 output dir을 직접 지정하는 편이 안전합니다.
 - `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers`, `market_data_provider_status` 가 함께 기록됩니다.
   - `market_data_provider_status` 는 source/provider별 `role`(`primary`/`fallback`), `status`(`ok`/`partial_success`/`rate_limited`/`failed`), ticker 성공/실패 count, `retry_count`, `used_cache`, `used_stale_cache`, `cooldown_active`, `fallback_provider`, 분류된 `error_kind`만 남깁니다.

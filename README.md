@@ -35,7 +35,7 @@ uv run python scripts/run_daily.py --date 2026-04-21 --skip-install
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --universe-name user-watchlist --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 ```
 
-`--tickers`/`--universe-tickers`는 comma-separated ticker를 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 이 옵션을 주지 않으면 기존 기본 universe와 output schema는 그대로 NASDAQ-100입니다. `--universe-name`은 custom ticker list와 함께만 허용됩니다. `scripts/run_daily.py`에서 custom tickers를 쓰고 `--output-root`를 생략하면 NASDAQ-100 cron의 `output/daily/latest`를 건드리지 않도록 기본 root가 `output/daily-user-watchlist`로 분리됩니다.
+`--tickers`/`--universe-tickers`는 comma-separated ticker를 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 이 옵션을 주지 않으면 기존 기본 universe와 output schema는 그대로 NASDAQ-100입니다. `--universe-name`은 custom ticker list와 함께만 허용됩니다. `scripts/run_daily.py`에서 custom tickers를 쓰고 `--output-root`를 생략하면 NASDAQ-100 cron의 `output/daily/latest`를 건드리지 않도록 기본 root가 `output/daily-user-watchlist`로 분리되고, 성공 시 `output/assistant/latest-user-briefing-screener.{json,md}`도 자동 갱신됩니다.
 
 ### Assistant briefing
 ```bash

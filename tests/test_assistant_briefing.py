@@ -158,6 +158,7 @@ def test_briefing_payload_exposes_provider_status_without_raw_sensitive_message(
                 "message": "raw token=secret-value should not be copied",
             }
         ],
+        "reliability_label": "stale",
     }
 
     payload = build_assistant_briefing_payload(
@@ -184,11 +185,12 @@ def test_briefing_payload_exposes_provider_status_without_raw_sensitive_message(
             "used_stale_cache": True,
         }
     ]
-    assert payload["data_quality"]["market_data_reliability"] == "partial"
+    assert payload["data_quality"]["reliability_label"] == "stale"
+    assert payload["data_quality"]["market_data_reliability"] == "stale"
     assert "**primary twelve-data**" in markdown
     assert "fallback=yfinance" in markdown
     assert "error=rate_limited" in markdown
-    assert "Reliability label**: partial" in markdown
+    assert "Reliability label**: stale" in markdown
     assert "secret-value" not in json.dumps(payload)
     assert "raw token" not in markdown
 

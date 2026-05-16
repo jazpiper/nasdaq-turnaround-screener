@@ -20,6 +20,7 @@ def build_json_report(result: ScreenRunResult) -> dict:
         "candidate_count": result.candidate_count,
         "data_failures": list(result.metadata.data_failures),
         "market_data_provider_status": [dict(status) for status in result.metadata.market_data_provider_status],
+        "reliability_label": result.metadata.reliability_label,
         "notes": list(result.metadata.notes),
         "candidates": [candidate.model_dump(mode="json") for candidate in result.candidates],
     }

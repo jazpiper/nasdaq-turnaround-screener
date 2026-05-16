@@ -211,6 +211,8 @@ def build_market_data_provider(settings: Settings) -> YFinanceMarketDataProvider
         settings.market_data_provider,
         twelve_data_api_key=settings.twelve_data_api_key,
         twelve_data_base_url=settings.twelve_data_base_url,
+        finnhub_api_key=settings.finnhub_api_key,
+        fmp_api_key=settings.fmp_api_key,
     )
     provider = YFinanceMarketDataProvider(fetcher=fetcher)
     if settings.daily_intraday_source_mode == "prefer-staged":

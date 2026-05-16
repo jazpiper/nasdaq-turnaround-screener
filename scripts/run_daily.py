@@ -196,6 +196,33 @@ def run_screener(
     return completed.returncode
 
 
+def run_assistant_briefing(
+    python_path: Path,
+    root: Path,
+    report_path: Path,
+    output_dir: Path,
+    user_tickers: str,
+    artifact_basename: str | None = None,
+) -> int:
+    command = [
+        str(python_path),
+        "-m",
+        "screener.cli.main",
+        "build-assistant-briefing",
+        "--report-path",
+        str(report_path),
+        "--output-dir",
+        str(output_dir),
+        "--user-tickers",
+        user_tickers,
+    ]
+    if artifact_basename is not None:
+        command.extend(["--artifact-basename", artifact_basename])
+
+    completed = subprocess.run(command, cwd=root)
+    return completed.returncode
+
+
 def main() -> int:
     args = parse_args()
     root = project_root()
@@ -235,6 +262,18 @@ def main() -> int:
         latest_path = update_latest_pointer(output_root, output_dir)
         print(f"Daily output: {output_dir}")
         print(f"Latest output: {latest_path}")
+
+    if args.universe_tickers is not None and not args.dry_run:
+        briefing_exit_code = run_assistant_briefing(
+            python_path,
+            root,
+            output_dir / "daily-report.json",
+            root / "output" / "assistant",
+            args.universe_tickers,
+        )
+        if briefing_exit_code != 0:
+            return briefing_exit_code
+
     return 0
 
 

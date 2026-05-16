@@ -56,6 +56,7 @@ class RunMetadata(BaseModel):
     planned_tickers: list[str] = Field(default_factory=list)
     data_failures: list[str] = Field(default_factory=list)
     market_data_provider_status: list[dict[str, object]] = Field(default_factory=list)
+    reliability_label: str | None = None
     notes: list[str] = Field(default_factory=list)
 
 

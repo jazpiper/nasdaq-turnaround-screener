@@ -7,6 +7,7 @@ from typing import Any
 
 from screener.storage.files import write_json, write_text
 from screener.universe import normalize_ticker
+from screener.data.resilience import derive_market_data_reliability_label
 
 JSON_ARTIFACT_NAME = "latest-user-briefing-screener.json"
 MARKDOWN_ARTIFACT_NAME = "latest-user-briefing-screener.md"
@@ -96,7 +97,7 @@ def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
         lines.append("")
         lines.append("### Market data sources")
         lines.extend(f"- {_format_provider_status(status)}" for status in provider_statuses)
-        reliability = payload.get("data_quality", {}).get("market_data_reliability")
+        reliability = payload.get("data_quality", {}).get("reliability_label") or payload.get("data_quality", {}).get("market_data_reliability")
         if reliability:
             lines.append(f"- **Reliability label**: {reliability}")
 
@@ -204,7 +205,13 @@ def _build_data_quality(daily_report: dict[str, Any]) -> dict[str, Any]:
     provider_statuses = _sanitize_provider_statuses(daily_report.get("market_data_provider_status", []))
     if provider_statuses:
         data_quality["market_data_provider_status"] = provider_statuses
-        data_quality["market_data_reliability"] = _derive_market_data_reliability(provider_statuses)
+        reliability_label = daily_report.get("reliability_label") or derive_market_data_reliability_label(provider_statuses)
+        data_quality["reliability_label"] = reliability_label
+        data_quality["market_data_reliability"] = reliability_label
+    elif daily_report.get("reliability_label"):
+        reliability_label = str(daily_report.get("reliability_label"))
+        data_quality["reliability_label"] = reliability_label
+        data_quality["market_data_reliability"] = reliability_label
     return data_quality
 
 

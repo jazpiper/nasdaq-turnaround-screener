@@ -5,8 +5,8 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
-from typing import Any, Callable, Iterable, Mapping, Protocol
+from datetime import date, datetime, timezone
+from typing import Any, Callable, Iterable, Mapping, Protocol, cast
 from urllib.error import HTTPError
 from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
@@ -17,6 +17,7 @@ from screener.data.resilience import (
     ProviderResilienceState,
     build_source_status,
     classify_provider_error,
+    derive_market_data_reliability_label,
     normalize_ticker_list,
     retry_with_backoff,
     sanitize_provider_message,
@@ -125,7 +126,7 @@ _CANONICAL_FIELD_ALIASES: Mapping[str, tuple[str, ...]] = {
     "High": ("High", "high"),
     "Low": ("Low", "low"),
     "Close": ("Close", "close"),
-    "Adj Close": ("Adj Close", "adj_close", "adjusted_close", "previous_close"),
+    "Adj Close": ("Adj Close", "adj_close", "adjClose", "adjusted_close", "adjustedClose", "previous_close"),
     "Volume": ("Volume", "volume"),
 }
 
@@ -189,6 +190,164 @@ def _flatten_yfinance_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, 
             normalized_row[normalized_key] = value
         flattened.append(normalized_row)
     return flattened
+
+
+def _load_json_response(response_reader: HttpResponseReader, url: str) -> dict[str, Any]:
+    payload = json.loads(response_reader(url))
+    if not isinstance(payload, dict):
+        raise MarketDataProviderError("Provider response must be a JSON object")
+    return payload
+
+
+def _finnhub_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("s") not in {None, "ok"}:
+        message = sanitize_provider_message(payload.get("error") or payload.get("message") or "Finnhub request failed")
+        raise MarketDataProviderError(message)
+
+    timestamps = payload.get("t")
+    opens = payload.get("o")
+    highs = payload.get("h")
+    lows = payload.get("l")
+    closes = payload.get("c")
+    volumes = payload.get("v")
+    if not all(isinstance(series, list) for series in (timestamps, opens, highs, lows, closes, volumes)):
+        raise MarketDataProviderError("Finnhub response did not include OHLCV series")
+
+    timestamps_list = cast(list[Any], timestamps)
+    opens_list = cast(list[Any], opens)
+    highs_list = cast(list[Any], highs)
+    lows_list = cast(list[Any], lows)
+    closes_list = cast(list[Any], closes)
+    volumes_list = cast(list[Any], volumes)
+
+    lengths = {len(timestamps_list), len(opens_list), len(highs_list), len(lows_list), len(closes_list), len(volumes_list)}
+    if len(lengths) != 1:
+        raise MarketDataProviderError("Finnhub response series lengths did not match")
+
+    rows: list[dict[str, Any]] = []
+    for index, timestamp in enumerate(timestamps_list):
+        rows.append(
+            {
+                "datetime": datetime.fromtimestamp(int(timestamp), tz=timezone.utc).date().isoformat(),
+                "open": opens_list[index],
+                "high": highs_list[index],
+                "low": lows_list[index],
+                "close": closes_list[index],
+                "adj_close": closes_list[index],
+                "volume": volumes_list[index],
+            }
+        )
+    return rows
+
+
+def _fmp_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if "historical" in payload:
+        historical = payload.get("historical")
+        if not isinstance(historical, list):
+            raise MarketDataProviderError("FMP response did not include historical rows")
+        return [dict(row) for row in historical if isinstance(row, dict)]
+    message = payload.get("Error Message") or payload.get("message") or payload.get("error") or "FMP request failed"
+    raise MarketDataProviderError(sanitize_provider_message(message))
+
+
+class FinnhubDailyBarFetcher:
+    """Fetch daily OHLCV bars from Finnhub stock candle endpoint."""
+
+    provider_name = "finnhub"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str = "https://finnhub.io/api/v1/stock/candle",
+        response_reader: HttpResponseReader | None = None,
+        lookback_days: int = 120,
+    ) -> None:
+        self.api_key = api_key or os.getenv("FINNHUB_API_KEY") or os.getenv("SCREENER_FINNHUB_API_KEY")
+        self.base_url = base_url
+        self.response_reader = response_reader or _read_url
+        self.lookback_days = lookback_days
+
+    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+        if not self.api_key:
+            raise MarketDataProviderError("Finnhub API key is required")
+
+        ticker_list = normalize_ticker_list(tickers)
+        bars_by_ticker: dict[str, list[DailyBar]] = {}
+        failed_tickers: dict[str, str] = {}
+        end_ts = int(datetime.now(tz=timezone.utc).timestamp())
+        start_ts = end_ts - max(self.lookback_days, 1) * 86400
+
+        for ticker in ticker_list:
+            params = urlencode({"symbol": ticker, "resolution": "D", "from": str(start_ts), "to": str(end_ts), "token": self.api_key})
+            try:
+                payload = _load_json_response(self.response_reader, f"{self.base_url}?{params}")
+                rows = _finnhub_rows_from_payload(payload)
+                bars = normalize_ohlcv_rows(ticker, rows)
+                if not bars:
+                    raise ValueError("No price rows returned")
+                bars_by_ticker[ticker] = bars
+            except Exception as exc:
+                failed_tickers[ticker] = sanitize_provider_message(exc)
+
+        status = build_source_status(
+            provider=self.provider_name,
+            role="primary",
+            attempted=len(ticker_list),
+            successful=len(bars_by_ticker),
+            failed=len(failed_tickers),
+            message=next(iter(failed_tickers.values()), None),
+        ).as_dict()
+        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
+
+
+class FMPDailyBarFetcher:
+    """Fetch daily OHLCV bars from Financial Modeling Prep historical-price-full endpoint."""
+
+    provider_name = "fmp"
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str = "https://financialmodelingprep.com/api/v3/historical-price-full",
+        response_reader: HttpResponseReader | None = None,
+        outputsize: int = 120,
+    ) -> None:
+        self.api_key = api_key or os.getenv("FMP_API_KEY") or os.getenv("FINANCIAL_MODELING_PREP_API_KEY") or os.getenv("SCREENER_FMP_API_KEY")
+        self.base_url = base_url.rstrip("/")
+        self.response_reader = response_reader or _read_url
+        self.outputsize = outputsize
+
+    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+        if not self.api_key:
+            raise MarketDataProviderError("FMP API key is required")
+
+        ticker_list = normalize_ticker_list(tickers)
+        bars_by_ticker: dict[str, list[DailyBar]] = {}
+        failed_tickers: dict[str, str] = {}
+
+        for ticker in ticker_list:
+            params = urlencode({"timeseries": str(self.outputsize), "apikey": self.api_key})
+            try:
+                payload = _load_json_response(self.response_reader, f"{self.base_url}/{ticker}?{params}")
+                rows = _fmp_rows_from_payload(payload)
+                bars = normalize_ohlcv_rows(ticker, rows)
+                if not bars:
+                    raise ValueError("No price rows returned")
+                bars_by_ticker[ticker] = bars
+            except Exception as exc:
+                failed_tickers[ticker] = sanitize_provider_message(exc)
+
+        status = build_source_status(
+            provider=self.provider_name,
+            role="primary",
+            attempted=len(ticker_list),
+            successful=len(bars_by_ticker),
+            failed=len(failed_tickers),
+            message=next(iter(failed_tickers.values()), None),
+        ).as_dict()
+        return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
 
 
 class YFinanceDailyBarFetcher:
@@ -473,19 +632,29 @@ def build_market_data_fetcher(
     *,
     twelve_data_api_key: str | None = None,
     twelve_data_base_url: str = "https://api.twelvedata.com/time_series",
+    finnhub_api_key: str | None = None,
+    fmp_api_key: str | None = None,
 ) -> MarketDataFetcher:
     provider_names = [name.strip().lower() for name in provider.split(",") if name.strip()]
     if not provider_names:
         raise MarketDataProviderError("Market data provider cannot be blank")
 
-    built_providers = [
-        (_canonical_provider_name(provider_name), _build_single_market_data_fetcher(
+    built_providers: list[tuple[str, MarketDataFetcher]] = []
+    for provider_name in provider_names:
+        fetcher = _build_single_market_data_fetcher(
             provider_name,
             twelve_data_api_key=twelve_data_api_key,
             twelve_data_base_url=twelve_data_base_url,
-        ))
-        for provider_name in provider_names
-    ]
+            finnhub_api_key=finnhub_api_key,
+            fmp_api_key=fmp_api_key,
+            allow_missing_credentials=len(provider_names) > 1,
+        )
+        if fetcher is None:
+            continue
+        built_providers.append((_canonical_provider_name(provider_name), fetcher))
+
+    if not built_providers:
+        raise MarketDataProviderError("No usable market data providers are configured")
     if len(built_providers) == 1:
         return built_providers[0][1]
     return ResilientMarketDataFetcher(built_providers)
@@ -497,6 +666,10 @@ def _canonical_provider_name(provider: str) -> str:
         return "yfinance"
     if normalized_provider in {"twelve-data", "twelvedata", "twelve_data"}:
         return "twelve-data"
+    if normalized_provider in {"finnhub"}:
+        return "finnhub"
+    if normalized_provider in {"fmp", "financial-modeling-prep", "financial_modeling_prep"}:
+        return "fmp"
     raise MarketDataProviderError(f"Unsupported market data provider: {provider}")
 
 
@@ -505,13 +678,26 @@ def _build_single_market_data_fetcher(
     *,
     twelve_data_api_key: str | None,
     twelve_data_base_url: str,
-) -> MarketDataFetcher:
+    finnhub_api_key: str | None,
+    fmp_api_key: str | None,
+    allow_missing_credentials: bool,
+) -> MarketDataFetcher | None:
     canonical_provider = _canonical_provider_name(provider)
     if canonical_provider == "yfinance":
         return YFinanceDailyBarFetcher()
     if canonical_provider == "twelve-data":
+        if allow_missing_credentials and not (twelve_data_api_key or os.getenv("TWELVE_DATA_API_KEY")):
+            return None
         return TwelveDataDailyBarFetcher(
             api_key=twelve_data_api_key,
             base_url=twelve_data_base_url,
         )
+    if canonical_provider == "finnhub":
+        if allow_missing_credentials and not (finnhub_api_key or os.getenv("FINNHUB_API_KEY") or os.getenv("SCREENER_FINNHUB_API_KEY")):
+            return None
+        return FinnhubDailyBarFetcher(api_key=finnhub_api_key)
+    if canonical_provider == "fmp":
+        if allow_missing_credentials and not (fmp_api_key or os.getenv("FMP_API_KEY") or os.getenv("FINANCIAL_MODELING_PREP_API_KEY") or os.getenv("SCREENER_FMP_API_KEY")):
+            return None
+        return FMPDailyBarFetcher(api_key=fmp_api_key)
     raise MarketDataProviderError(f"Unsupported market data provider: {provider}")

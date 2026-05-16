@@ -28,6 +28,8 @@ def build_markdown_report(result: ScreenRunResult) -> str:
     if metadata.market_data_provider_status:
         lines.append("## Market Data Provider Status")
         lines.extend(_provider_status_line(status) for status in metadata.market_data_provider_status)
+        if metadata.reliability_label:
+            lines.append(f"- **Reliability label**: {metadata.reliability_label}")
         lines.append("")
 
     if not result.candidates:

@@ -8,13 +8,13 @@
 
 ## Build, Test, and Development Commands
 - `uv sync --extra dev` creates/updates `.venv` from `uv.lock` with development dependencies.
-- `uv run python -m screener.cli.main run --date 2026-04-21 --dry-run` runs the daily screener without writing artifacts.
-- `uv run python scripts/run_daily.py --date 2026-04-21 --skip-install` runs the daily wrapper and updates `output/daily/latest`.
-- `uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-1 --skip-install` runs the operational intraday wrapper for the full universe.
-- `uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0` executes one raw intraday shard using the CLI defaults.
-- `uv run python -m screener.cli.main init-oracle-schema` initializes Oracle tables before persistence is enabled.
-- `uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21` replays historical candidate generation and writes forward-return artifacts.
 - `uv run pytest` runs the full suite; use `uv run pytest tests/test_cli.py -q` for targeted iteration.
+- `uv run python -m screener.cli.main run --date YYYY-MM-DD --dry-run` runs the daily screener without writing artifacts.
+- `uv run python scripts/run_daily.py --date YYYY-MM-DD --skip-install` runs the daily wrapper and updates `output/daily/latest`.
+- `uv run python scripts/run_intraday_window.py --date YYYY-MM-DD --window-id open-1 --skip-install` runs the operational intraday wrapper for the full universe.
+- `uv run python -m screener.cli.main collect-window --date YYYY-MM-DD --window-index 0` executes one raw intraday shard using the CLI defaults.
+- `uv run python -m screener.cli.main init-oracle-schema` initializes Oracle tables before persistence is enabled.
+- `uv run python -m screener.cli.main backtest --start-date YYYY-MM-DD --end-date YYYY-MM-DD` replays historical candidate generation and writes forward-return artifacts.
 
 ## Coding Style & Naming Conventions
 - Target Python 3.11+ and follow the existing style: 4-space indentation, explicit type hints, and `from __future__ import annotations` in module headers.
@@ -29,6 +29,7 @@
 
 ## Operational Notes
 - Keep this file concise because it is injected into agent context for this workdir. Put long runbooks/design notes in `docs/` and link them instead of expanding `AGENTS.md`.
+- Route code changes, test updates, and repo edits to the coder profile; this file is for analysis, documentation, and operational guidance.
 - Treat `--date` values as `America/New_York` trading dates, especially when running from UTC or KST schedulers.
 - `scripts/run_daily.py` is the normal daily operational entrypoint because it updates `output/daily/latest` after the dated run completes.
 - OpenClaw-style consumers read stable alert entrypoints such as `output/daily/latest/alert-events.json` and `output/intraday/<NY_DATE>/latest-alert-events.json`; regenerate these artifacts through the runners instead of editing them manually.

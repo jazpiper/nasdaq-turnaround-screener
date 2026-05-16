@@ -9,6 +9,7 @@ from screener.alerts.state import load_alert_state, save_alert_state
 from screener.alerts.writer import build_daily_alert_paths, write_alert_document
 from screener.config import Settings
 from screener.data import EarningsCalendarProvider, EarningsInfo
+from screener.data.resilience import derive_market_data_reliability_label
 from screener.models import (
     CandidateResult,
     PipelineContext,
@@ -128,6 +129,7 @@ class ScreenPipeline:
 
         provider_failures = getattr(self.market_data_provider, "failures", {})
         provider_status = _safe_provider_status(getattr(self.market_data_provider, "provider_status", []))
+        reliability_label = derive_market_data_reliability_label(provider_status)
         if isinstance(provider_failures, dict):
             failures.extend(f"{ticker}: {message}" for ticker, message in provider_failures.items())
 
@@ -181,6 +183,7 @@ class ScreenPipeline:
                 planned_tickers=planned_tickers,
                 data_failures=failures,
                 market_data_provider_status=provider_status,
+                reliability_label=reliability_label,
                 notes=notes,
             ),
             candidates=candidates,

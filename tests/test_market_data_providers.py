@@ -17,6 +17,8 @@ from screener.config import get_settings
 from screener.data.market_data import (
     DEFAULT_HTTP_TIMEOUT_SECONDS,
     FetchResult,
+    FMPDailyBarFetcher,
+    FinnhubDailyBarFetcher,
     MarketDataProviderError,
     ResilientMarketDataFetcher,
     TwelveDataDailyBarFetcher,
@@ -37,6 +39,11 @@ class MarketDataProviderTests(unittest.TestCase):
             "TWELVE_DATA_API_KEY",
             "TWELVE_DATA_BASE_URL",
             "SCREENER_OPENCLAW_SECRETS_PATH",
+            "FINNHUB_API_KEY",
+            "SCREENER_FINNHUB_API_KEY",
+            "FMP_API_KEY",
+            "FINANCIAL_MODELING_PREP_API_KEY",
+            "SCREENER_FMP_API_KEY",
         ):
             os.environ.pop(key, None)
 
@@ -349,6 +356,61 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(result.source_statuses[1]["role"], "fallback")
         self.assertNotIn("secret-value", json.dumps(result.source_statuses))
 
+    def test_finnhub_fetcher_normalizes_mocked_response(self):
+        payload = json.dumps(
+            {
+                "s": "ok",
+                "t": [1713657600, 1713744000],
+                "o": [189.0, 190.0],
+                "h": [193.0, 194.0],
+                "l": [188.0, 189.0],
+                "c": [192.5, 193.5],
+                "v": [1000, 1200],
+            }
+        )
+
+        fetcher = FinnhubDailyBarFetcher(api_key="secret", response_reader=lambda url: payload)
+        result = fetcher.fetch(["aapl"])
+
+        self.assertEqual(result.failed_tickers, {})
+        self.assertEqual(list(result.bars_by_ticker), ["AAPL"])
+        self.assertEqual(result.bars_by_ticker["AAPL"][0].trading_date.isoformat(), "2024-04-21")
+        self.assertEqual(result.source_statuses[0]["provider"], "finnhub")
+
+    def test_fmp_fetcher_normalizes_mocked_response(self):
+        payload = json.dumps(
+            {
+                "historical": [
+                    {
+                        "date": "2026-04-21",
+                        "open": 189.0,
+                        "high": 193.0,
+                        "low": 188.0,
+                        "close": 192.5,
+                        "adjClose": 192.5,
+                        "volume": 1000,
+                    },
+                    {
+                        "date": "2026-04-22",
+                        "open": 190.0,
+                        "high": 194.0,
+                        "low": 189.0,
+                        "close": 193.5,
+                        "adjClose": 193.5,
+                        "volume": 1200,
+                    },
+                ]
+            }
+        )
+
+        fetcher = FMPDailyBarFetcher(api_key="secret", response_reader=lambda url: payload)
+        result = fetcher.fetch(["aapl"])
+
+        self.assertEqual(result.failed_tickers, {})
+        self.assertEqual(list(result.bars_by_ticker), ["AAPL"])
+        self.assertEqual(result.bars_by_ticker["AAPL"][-1].close, 193.5)
+        self.assertEqual(result.source_statuses[0]["provider"], "fmp")
+
     def test_build_market_data_fetcher_accepts_fallback_chain(self):
         fetcher = build_market_data_fetcher("twelve-data,yfinance", twelve_data_api_key="secret")
 
@@ -424,7 +486,7 @@ class MarketDataProviderTests(unittest.TestCase):
 
             settings = get_settings(openclaw_secrets_path=secrets_path)
 
-        self.assertEqual(settings.market_data_provider, "yfinance")
+        self.assertEqual(settings.market_data_provider, "finnhub,twelve-data,fmp,yfinance")
         self.assertEqual(settings.twelve_data_api_key, "secret-from-openclaw")
         self.assertEqual(settings.openclaw_secrets_path, secrets_path)
 
@@ -436,7 +498,7 @@ class MarketDataProviderTests(unittest.TestCase):
 
             settings = get_settings(openclaw_secrets_path=secrets_path)
 
-        self.assertEqual(settings.market_data_provider, "yfinance")
+        self.assertEqual(settings.market_data_provider, "finnhub,twelve-data,fmp,yfinance")
         self.assertEqual(settings.twelve_data_api_key, "env-secret")
 
     def test_get_settings_falls_back_to_yfinance_when_no_twelve_data_key_exists(self):
@@ -444,7 +506,7 @@ class MarketDataProviderTests(unittest.TestCase):
             secrets_path = Path(tmp_dir) / "missing-secrets.json"
             settings = get_settings(openclaw_secrets_path=secrets_path)
 
-        self.assertEqual(settings.market_data_provider, "yfinance")
+        self.assertEqual(settings.market_data_provider, "finnhub,twelve-data,fmp,yfinance")
         self.assertIsNone(settings.twelve_data_api_key)
 
 

@@ -13,6 +13,8 @@ ORACLE_SQL_USER_ENV_NAMES = ("ORACLE_DB_USER", "SCREENER_ORACLE_SQL_USER")
 ORACLE_SQL_PASSWORD_ENV_NAMES = ("ORACLE_DB_PASSWORD", "SCREENER_ORACLE_SQL_PASSWORD")
 ORACLE_SQL_CONNECT_STRING_ENV_NAMES = ("ORACLE_DB_CONNECT_STRING", "SCREENER_ORACLE_SQL_CONNECT_STRING")
 OPENCLAW_SECRETS_PATH_ENV_NAMES = ("SCREENER_OPENCLAW_SECRETS_PATH", "OPENCLAW_SECRETS_PATH")
+FINNHUB_API_KEY_ENV_NAMES = ("FINNHUB_API_KEY", "SCREENER_FINNHUB_API_KEY")
+FMP_API_KEY_ENV_NAMES = ("FMP_API_KEY", "FINANCIAL_MODELING_PREP_API_KEY", "SCREENER_FMP_API_KEY")
 
 
 @dataclass(slots=True)
@@ -31,6 +33,8 @@ class Settings:
     market_data_provider: str = "yfinance"
     twelve_data_api_key: str | None = None
     twelve_data_base_url: str = DEFAULT_TWELVE_DATA_BASE_URL
+    finnhub_api_key: str | None = None
+    fmp_api_key: str | None = None
     openclaw_secrets_path: Path = default_openclaw_secrets_path()
     default_notes: list[str] = field(
         default_factory=lambda: [
@@ -57,12 +61,16 @@ def get_settings(
     resolved_secrets_path = _resolve_openclaw_secrets_path(openclaw_secrets_path)
     secrets = load_openclaw_secrets(resolved_secrets_path)
     resolved_twelve_data_api_key = twelve_data_api_key or os.getenv("TWELVE_DATA_API_KEY") or _coerce_optional_string(secrets.get("/twelveData/apiKey") if secrets else None)
+    resolved_finnhub_api_key = _coerce_optional_string(os.getenv("FINNHUB_API_KEY") or os.getenv("SCREENER_FINNHUB_API_KEY")) or _coerce_optional_string(secrets.get("/finnhub/apiKey") if secrets else None)
+    resolved_fmp_api_key = _coerce_optional_string(os.getenv("FMP_API_KEY") or os.getenv("FINANCIAL_MODELING_PREP_API_KEY") or os.getenv("SCREENER_FMP_API_KEY")) or _coerce_optional_string(secrets.get("/fmp/apiKey") if secrets else None)
     resolved_market_data_provider = market_data_provider or os.getenv("SCREENER_MARKET_DATA_PROVIDER") or _default_market_data_provider()
 
     settings = Settings(
         market_data_provider=resolved_market_data_provider,
         twelve_data_api_key=resolved_twelve_data_api_key,
         twelve_data_base_url=os.getenv("TWELVE_DATA_BASE_URL", DEFAULT_TWELVE_DATA_BASE_URL),
+        finnhub_api_key=resolved_finnhub_api_key,
+        fmp_api_key=resolved_fmp_api_key,
         openclaw_secrets_path=resolved_secrets_path,
         intraday_window_ids=parse_window_ids(os.getenv("SCREENER_INTRADAY_WINDOW_IDS")),
         intraday_output_root=Path(os.getenv("SCREENER_INTRADAY_OUTPUT_ROOT", DEFAULT_INTRADAY_OUTPUT_ROOT)),
@@ -80,7 +88,7 @@ def get_settings(
 
 
 def _default_market_data_provider() -> str:
-    return "yfinance"
+    return "finnhub,twelve-data,fmp,yfinance"
 
 
 def _resolve_openclaw_secrets_path(openclaw_secrets_path: str | Path | None) -> Path:

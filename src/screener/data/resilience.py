@@ -92,6 +92,8 @@ def sanitize_provider_message(value: object, *, max_length: int = 160) -> str:
     text = _SECRET_QUERY_RE.sub(r"\1[redacted]", text)
     text = _URL_RE.sub(_redact_url, text)
     text = _LONG_TOKEN_RE.sub(lambda match: match.group(0).split(":", 1)[0].split("=", 1)[0] + "=[redacted]", text)
+    text = re.sub(r"(?i)\buser-agent\b[^\r\n;]*", "User-Agent=[redacted]", text)
+    text = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[redacted_email]", text)
     text = text.replace("\n", " ").replace("\r", " ").strip()
     if not text:
         return "provider_error"
@@ -156,6 +158,38 @@ def build_source_status(
         fallback_provider=fallback_provider,
         message=sanitize_provider_message(message) if message else None,
     )
+
+
+def derive_market_data_reliability_label(provider_statuses: list[dict[str, Any]]) -> str:
+    """Map provider statuses to the compact reliability label used in artifacts."""
+
+    if not provider_statuses:
+        return "unofficial"
+
+    if any(bool(status.get("used_stale_cache")) for status in provider_statuses):
+        return "stale"
+
+    successful = [status for status in provider_statuses if int(status.get("successful_ticker_count") or 0) > 0]
+    if not successful:
+        return "partial"
+
+    api_successful = [status for status in successful if str(status.get("provider") or "").lower() not in {"yfinance", "yf"}]
+    yfinance_successful = any(str(status.get("provider") or "").lower() in {"yfinance", "yf"} for status in successful)
+
+    if len(api_successful) >= 2:
+        return "api-cross-checked"
+
+    if len(api_successful) == 1:
+        if yfinance_successful:
+            return "fallback"
+        if any(str(status.get("role") or "").lower() == "fallback" for status in successful):
+            return "fallback"
+        return "single-api"
+
+    if yfinance_successful:
+        return "unofficial"
+
+    return "partial"
 
 
 @dataclass
