@@ -3,14 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
 
+from . import thresholds
+
 BUY_REVIEW_TIER = "buy-review"
 WATCHLIST_TIER = "watchlist"
 AVOID_HIGH_RISK_TIER = "avoid/high-risk"
 
-BUY_REVIEW_MIN_SCORE = 60
-BUY_REVIEW_MIN_REVERSAL = 15
-BUY_REVIEW_MIN_VOLUME_RATIO = 0.8
-BUY_REVIEW_MAX_RISK_COUNT = 3
+BUY_REVIEW_MIN_SCORE = thresholds.BUY_REVIEW_MIN_SCORE
+BUY_REVIEW_MIN_REVERSAL = thresholds.BUY_REVIEW_MIN_REVERSAL
+BUY_REVIEW_MIN_VOLUME_RATIO = thresholds.BUY_REVIEW_MIN_VOLUME_RATIO
+BUY_REVIEW_MAX_RISK_COUNT = thresholds.BUY_REVIEW_MAX_RISK_COUNT
 
 
 @dataclass(frozen=True)

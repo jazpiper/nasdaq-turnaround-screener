@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 from screener.alerts import AlertSidecarError, build_daily_alert_document
+from screener.alerts.policy import evaluate_daily_quality_gate
 from screener.alerts.state import load_alert_state, save_alert_state
 from screener.alerts.writer import build_daily_alert_paths, write_alert_document
 from screener.config import Settings
@@ -21,6 +22,7 @@ from screener.models import (
 )
 from screener.reporting.json_report import build_json_report
 from screener.reporting.markdown import build_markdown_report
+from screener.reporting.outcomes import build_previous_candidate_outcomes
 from screener.scoring import TierThresholds, classify_investability_tier, rank_candidates
 from screener.storage.files import ensure_directory, write_json, write_text
 
@@ -102,6 +104,7 @@ class ScreenPipeline:
         self.benchmark_market_data_provider = benchmark_market_data_provider or build_market_data_provider(settings)
 
     def run(self, context: PipelineContext) -> tuple[ScreenRunResult, RunArtifacts]:
+        run_started_at = datetime.now(UTC)
         tickers = self.universe_provider.load_universe(context)
         candidates: list[CandidateResult] = []
         failures: list[str] = []
@@ -136,6 +139,7 @@ class ScreenPipeline:
         bars_nonempty_count = 0
         latest_bar_date_mismatch_count = 0
         insufficient_history_count = 0
+        current_closes: dict[str, float] = {}
 
         for ticker in tickers:
             if isinstance(provider_failures, dict) and ticker.ticker in provider_failures:
@@ -153,6 +157,9 @@ class ScreenPipeline:
                         latest_bar_date_mismatch_count += 1
                     if len(history) < 60:
                         insufficient_history_count += 1
+                    close = _latest_close(history)
+                    if close is not None:
+                        current_closes[ticker.ticker.upper()] = close
                 indicators = self.indicator_engine.compute(history, ticker, context)
                 indicators = merge_benchmark_context(indicators, benchmark_context)
                 indicators = merge_earnings_context(indicators, earnings_by_ticker.get(ticker.ticker))
@@ -163,30 +170,45 @@ class ScreenPipeline:
                 failures.append(f"{ticker.ticker}: {exc}")
 
         candidates.sort(key=lambda candidate: (-_selection_score(candidate), -candidate.score, candidate.ticker))
+        previous_candidate_outcomes = build_previous_candidate_outcomes(
+            current_run_date=context.run_date.isoformat(),
+            current_closes=current_closes,
+            daily_output_root=context.output_dir.parent,
+        )
 
         planned_tickers = [item.ticker for item in tickers]
 
+        run_completed_at = datetime.now(UTC)
+        metadata = RunMetadata(
+            run_date=context.run_date,
+            generated_at=context.generated_at,
+            universe=context.universe_name,
+            run_mode=context.run_mode,
+            dry_run=context.dry_run,
+            artifact_directory=context.output_dir,
+            planned_ticker_count=len(planned_tickers),
+            successful_ticker_count=len(planned_tickers) - len(failures),
+            failed_ticker_count=len(failures),
+            bars_nonempty_count=bars_nonempty_count,
+            latest_bar_date_mismatch_count=latest_bar_date_mismatch_count,
+            insufficient_history_count=insufficient_history_count,
+            planned_tickers=planned_tickers,
+            data_failures=failures,
+            market_data_provider_status=provider_status,
+            reliability_label=reliability_label,
+            run_started_at=run_started_at,
+            run_completed_at=run_completed_at,
+            run_duration_seconds=round((run_completed_at - run_started_at).total_seconds(), 3),
+            notes=notes,
+        )
+        metadata.quality_gate = evaluate_daily_quality_gate(metadata)
+        metadata.quality_gate_reasons = _daily_quality_gate_reasons(metadata)
+        metadata.observability = _build_run_observability(metadata)
+
         result = ScreenRunResult(
-            metadata=RunMetadata(
-                run_date=context.run_date,
-                generated_at=context.generated_at,
-                universe=context.universe_name,
-                run_mode=context.run_mode,
-                dry_run=context.dry_run,
-                artifact_directory=context.output_dir,
-                planned_ticker_count=len(planned_tickers),
-                successful_ticker_count=len(planned_tickers) - len(failures),
-                failed_ticker_count=len(failures),
-                bars_nonempty_count=bars_nonempty_count,
-                latest_bar_date_mismatch_count=latest_bar_date_mismatch_count,
-                insufficient_history_count=insufficient_history_count,
-                planned_tickers=planned_tickers,
-                data_failures=failures,
-                market_data_provider_status=provider_status,
-                reliability_label=reliability_label,
-                notes=notes,
-            ),
+            metadata=metadata,
             candidates=candidates,
+            previous_candidate_outcomes=previous_candidate_outcomes,
         )
 
         artifacts = RunArtifacts()
@@ -273,6 +295,43 @@ def _safe_provider_status(value: object) -> list[dict[str, object]]:
     return statuses
 
 
+def _daily_quality_gate_reasons(metadata: RunMetadata) -> list[str]:
+    reasons: list[str] = []
+    if metadata.failed_ticker_count > 20:
+        reasons.append("failed_ticker_count_gt_20")
+    elif metadata.failed_ticker_count > 5:
+        reasons.append("failed_ticker_count_gt_5")
+    if metadata.bars_nonempty_count < 80:
+        reasons.append("bars_nonempty_count_lt_80")
+    if metadata.latest_bar_date_mismatch_count > 10:
+        reasons.append("latest_bar_date_mismatch_count_gt_10")
+    elif metadata.latest_bar_date_mismatch_count > 0:
+        reasons.append("latest_bar_date_mismatch_count_gt_0")
+    if metadata.insufficient_history_count > 5:
+        reasons.append("insufficient_history_count_gt_5")
+    return reasons
+
+
+def _build_run_observability(metadata: RunMetadata) -> dict[str, object]:
+    return {
+        "run_status": metadata.run_status,
+        "quality_gate": metadata.quality_gate,
+        "quality_gate_reasons": list(metadata.quality_gate_reasons),
+        "run_duration_seconds": metadata.run_duration_seconds,
+        "failure_counts": {
+            "failed_tickers": metadata.failed_ticker_count,
+            "latest_bar_date_mismatches": metadata.latest_bar_date_mismatch_count,
+            "insufficient_history": metadata.insufficient_history_count,
+        },
+        "data_coverage": {
+            "planned_tickers": metadata.planned_ticker_count,
+            "successful_tickers": metadata.successful_ticker_count,
+            "bars_nonempty": metadata.bars_nonempty_count,
+        },
+        "reliability_label": metadata.reliability_label,
+    }
+
+
 def build_context(
     run_date: date,
     generated_at: datetime | None = None,
@@ -300,6 +359,16 @@ __all__ = [
 
 def _selection_score(candidate: CandidateResult) -> int:
     return candidate.risk_adjusted_score if candidate.risk_adjusted_score is not None else candidate.score
+
+
+def _latest_close(history: Any) -> float | None:
+    try:
+        if history is None or history.empty or "close" not in history:
+            return None
+        value = history.sort_values("date").iloc[-1]["close"] if "date" in history else history.iloc[-1]["close"]
+        return _maybe_float(value)
+    except Exception:
+        return None
 
 
 def _daily_stable_alert_path(output_dir: Path, latest_dir: Path) -> Path | None:

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from screener.scoring import TierThresholds
-from screener.scoring.tiering import (
+from screener.scoring.thresholds import (
     BUY_REVIEW_MAX_RISK_COUNT,
     BUY_REVIEW_MIN_REVERSAL,
     BUY_REVIEW_MIN_SCORE,
@@ -116,7 +116,7 @@ def write_diff_markdown(path: Path, result: GridResult) -> Path:
     lines.append("\n## Review Checklist\n")
     lines.append("- [ ] Reviewed `output/tuning/.../tuning-grid.csv` for runner-up combinations")
     lines.append("- [ ] Checked that sample counts are large enough to be statistically meaningful")
-    lines.append("- [ ] Approved changes to `src/screener/scoring/tiering.py`")
+    lines.append("- [ ] Approved changes to `src/screener/scoring/thresholds.py`")
 
     return write_text(path, "\n".join(lines))
 
@@ -261,7 +261,7 @@ def write_diff_markdown_from_walkforward(path: Path, result: WalkForwardResult) 
     lines.append("\n## Review Checklist\n")
     lines.append("- [ ] Reviewed `tuning-walkforward.json` for per-window breakdown")
     lines.append("- [ ] Verified out-of-sample excess returns are positive")
-    lines.append("- [ ] Approved changes to `src/screener/scoring/tiering.py`")
+    lines.append("- [ ] Approved changes to `src/screener/scoring/thresholds.py`")
 
     return write_text(path, "\n".join(lines))
 

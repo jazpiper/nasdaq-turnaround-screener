@@ -70,6 +70,15 @@ uv run python -m screener.cli.main init-oracle-schema
 uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
 ```
 
+### Tuning
+```bash
+uv run python -m screener.cli.main tune --start-date 2026-01-01 --end-date 2026-04-21
+uv run python scripts/apply_tuning_proposal.py output/tuning/2026-04-21/tuning-proposal.json
+uv run python scripts/apply_tuning_proposal.py output/tuning/2026-04-21/tuning-proposal.json --write
+```
+
+`tune` writes walk-forward artifacts under `output/tuning/<end-date>/`. Review `tuning-proposal.json` and `tuning-diff.md`; `apply_tuning_proposal.py --write` applies approved buy-review threshold values to `src/screener/scoring/thresholds.py` and runs pytest.
+
 ## Output Layout
 - `output/daily/YYYY-MM-DD/`: `daily-report.md`, `daily-report.json`, `run-metadata.json`, `alert-events.json`
 - `output/daily/latest/`: 가장 최근 daily run 포인터와 stable daily consumer path (`alert-events.json`)

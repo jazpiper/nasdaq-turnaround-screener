@@ -72,7 +72,6 @@ def main() -> int:
         project_root=root,
     )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Intraday date: {args.run_date}")
     print(f"Window id: {window_id}")
     print(f"Output dir: {output_dir}")

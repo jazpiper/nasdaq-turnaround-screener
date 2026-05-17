@@ -595,6 +595,15 @@ def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
     result, artifacts = pipeline.run(context)
 
     assert result.candidate_count >= 1
+    assert result.metadata.run_started_at is not None
+    assert result.metadata.run_completed_at is not None
+    assert result.metadata.run_duration_seconds is not None
+    assert result.metadata.run_duration_seconds >= 0
+    assert result.metadata.run_status == "success"
+    assert result.metadata.quality_gate == "block"
+    assert "bars_nonempty_count_lt_80" in result.metadata.quality_gate_reasons
+    assert "latest_bar_date_mismatch_count_gt_0" in result.metadata.quality_gate_reasons
+    assert result.metadata.observability["quality_gate"] == "block"
     assert artifacts.markdown_path is None
     assert not tmp_path.exists() or not any(tmp_path.iterdir())
 

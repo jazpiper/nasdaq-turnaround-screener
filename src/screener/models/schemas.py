@@ -40,6 +40,18 @@ class CandidateResult(BaseModel):
     generated_at: datetime
 
 
+class PreviousCandidateOutcome(BaseModel):
+    ticker: str
+    name: str | None = None
+    previous_close: float | None = None
+    current_close: float | None = None
+    absolute_return: float | None = None
+    percent_return: float | None = None
+    previous_score: int | None = None
+    previous_risk_adjusted_score: int | None = None
+    previous_tier: str | None = None
+
+
 class RunMetadata(BaseModel):
     run_date: date
     generated_at: datetime
@@ -57,12 +69,20 @@ class RunMetadata(BaseModel):
     data_failures: list[str] = Field(default_factory=list)
     market_data_provider_status: list[dict[str, object]] = Field(default_factory=list)
     reliability_label: str | None = None
+    run_started_at: datetime | None = None
+    run_completed_at: datetime | None = None
+    run_duration_seconds: float | None = None
+    run_status: str = "success"
+    quality_gate: str | None = None
+    quality_gate_reasons: list[str] = Field(default_factory=list)
+    observability: dict[str, object] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
 
 
 class ScreenRunResult(BaseModel):
     metadata: RunMetadata
     candidates: list[CandidateResult] = Field(default_factory=list)
+    previous_candidate_outcomes: list[PreviousCandidateOutcome] = Field(default_factory=list)
 
     @property
     def candidate_count(self) -> int:

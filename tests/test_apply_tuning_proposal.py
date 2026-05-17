@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "apply_tuning_proposal.py"
-TIERING_PATH = Path(__file__).resolve().parents[1] / "src" / "screener" / "scoring" / "tiering.py"
+THRESHOLDS_PATH = Path(__file__).resolve().parents[1] / "src" / "screener" / "scoring" / "thresholds.py"
 
 
 def _make_proposal(tmp_path: Path, proposed: dict | None = None, status: str = "proposal") -> Path:
@@ -41,11 +41,11 @@ def test_dry_run_exits_zero(tmp_path: Path) -> None:
     assert result.returncode == 0
 
 
-def test_dry_run_does_not_modify_tiering_py(tmp_path: Path) -> None:
-    original = TIERING_PATH.read_text(encoding="utf-8")
+def test_dry_run_does_not_modify_thresholds_py(tmp_path: Path) -> None:
+    original = THRESHOLDS_PATH.read_text(encoding="utf-8")
     proposal = _make_proposal(tmp_path)
     _run_script(proposal)
-    assert TIERING_PATH.read_text(encoding="utf-8") == original
+    assert THRESHOLDS_PATH.read_text(encoding="utf-8") == original
 
 
 def test_dry_run_prints_diff(tmp_path: Path) -> None:
@@ -173,7 +173,7 @@ def test_apply_to_content_replaces_only_target_lines() -> None:
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-    original = TIERING_PATH.read_text(encoding="utf-8")
+    original = THRESHOLDS_PATH.read_text(encoding="utf-8")
     proposed = {"min_score": 55, "min_reversal": 12, "min_volume_ratio": 1.0, "max_risk_count": 4}
     updated = mod.apply_to_content(original, proposed)
 
@@ -182,9 +182,9 @@ def test_apply_to_content_replaces_only_target_lines() -> None:
     assert "BUY_REVIEW_MIN_VOLUME_RATIO = 1.0" in updated
     assert "BUY_REVIEW_MAX_RISK_COUNT = 4" in updated
     # unchanged lines still present
-    assert "BUY_REVIEW_TIER = " in updated
-    assert "WATCHLIST_TIER = " in updated
-    assert "class TierThresholds" in updated
+    assert "OVERSOLD_MAX_SCORE = " in updated
+    assert "VOLUME_MAX_SCORE = " in updated
+    assert "MARKET_CONTEXT_MAX_SCORE = " in updated
     # original values gone
     assert "BUY_REVIEW_MIN_SCORE = 60" not in updated
 
@@ -195,7 +195,7 @@ def test_apply_to_content_is_idempotent() -> None:
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-    original = TIERING_PATH.read_text(encoding="utf-8")
+    original = THRESHOLDS_PATH.read_text(encoding="utf-8")
     proposed = {"min_score": 55, "min_reversal": 12, "min_volume_ratio": 0.8, "max_risk_count": 3}
     once = mod.apply_to_content(original, proposed)
     twice = mod.apply_to_content(once, proposed)
@@ -208,14 +208,14 @@ def test_parse_current_from_file_reads_actual_constants() -> None:
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
 
-    from screener.scoring.tiering import (
+    from screener.scoring.thresholds import (
         BUY_REVIEW_MAX_RISK_COUNT,
         BUY_REVIEW_MIN_REVERSAL,
         BUY_REVIEW_MIN_SCORE,
         BUY_REVIEW_MIN_VOLUME_RATIO,
     )
 
-    current = mod.parse_current_from_file(TIERING_PATH)
+    current = mod.parse_current_from_file(THRESHOLDS_PATH)
     assert current["min_score"] == BUY_REVIEW_MIN_SCORE
     assert current["min_reversal"] == BUY_REVIEW_MIN_REVERSAL
     assert current["min_volume_ratio"] == BUY_REVIEW_MIN_VOLUME_RATIO

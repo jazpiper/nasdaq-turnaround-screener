@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply a tuning-proposal.json to src/screener/scoring/tiering.py.
+"""Apply a tuning-proposal.json to src/screener/scoring/thresholds.py.
 
 Usage (dry-run, default):
     uv run python scripts/apply_tuning_proposal.py output/tuning/2026-04-21/tuning-proposal.json
@@ -17,7 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TIERING_PATH_RELATIVE = "src/screener/scoring/tiering.py"
+THRESHOLDS_PATH_RELATIVE = "src/screener/scoring/thresholds.py"
 
 # Each entry: (constant_name, regex_pattern, format_func)
 # The pattern matches the full assignment line (anchored at line start).
@@ -110,13 +110,13 @@ def _validate_bounds(field_name: str, value: int | float) -> None:
         )
 
 
-def parse_current_from_file(tiering_path: Path) -> dict[str, int | float]:
-    content = tiering_path.read_text(encoding="utf-8")
+def parse_current_from_file(thresholds_path: Path) -> dict[str, int | float]:
+    content = thresholds_path.read_text(encoding="utf-8")
     result: dict[str, int | float] = {}
     for field_name, pattern, _ in _CONSTANT_PATTERNS:
         match = re.search(pattern, content, re.MULTILINE)
         if match is None:
-            sys.exit(f"ERROR: pattern not found in tiering.py: {pattern!r}")
+            sys.exit(f"ERROR: pattern not found in thresholds.py: {pattern!r}")
         # Extract the value part after "= "
         raw_value = match.group(0).split("=", 1)[1].strip()
         result[field_name] = float(raw_value) if "." in raw_value else int(raw_value)
@@ -124,7 +124,7 @@ def parse_current_from_file(tiering_path: Path) -> dict[str, int | float]:
 
 
 def apply_to_content(content: str, proposed: dict[str, int | float]) -> str:
-    """Replace the four constant lines and nothing else."""
+    """Replace the four tunable buy-review threshold lines and nothing else."""
     for field_name, pattern, template in _CONSTANT_PATTERNS:
         value = proposed[field_name]
         replacement = template.format(value=value)
@@ -132,7 +132,7 @@ def apply_to_content(content: str, proposed: dict[str, int | float]) -> str:
         if n != 1:
             sys.exit(
                 f"ERROR: expected exactly 1 match for {pattern!r}, got {n}. "
-                "Aborting to avoid corrupting tiering.py."
+                "Aborting to avoid corrupting thresholds.py."
             )
         content = new_content
     return content
@@ -158,31 +158,31 @@ def run_tests(root: Path) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Apply a tuning proposal to tiering.py.")
+    parser = argparse.ArgumentParser(description="Apply a tuning proposal to thresholds.py.")
     parser.add_argument("proposal", type=Path, help="Path to tuning-proposal.json.")
     parser.add_argument(
         "--write",
         action="store_true",
         default=False,
-        help="Actually rewrite tiering.py and run pytest. Default is dry-run.",
+        help="Actually rewrite thresholds.py and run pytest. Default is dry-run.",
     )
     args = parser.parse_args()
 
     root = project_root()
-    tiering_path = root / TIERING_PATH_RELATIVE
+    thresholds_path = root / THRESHOLDS_PATH_RELATIVE
     proposal_path = args.proposal if args.proposal.is_absolute() else Path.cwd() / args.proposal
 
     if not proposal_path.exists():
         sys.exit(f"ERROR: proposal file not found: {proposal_path}")
-    if not tiering_path.exists():
-        sys.exit(f"ERROR: tiering.py not found at expected path: {tiering_path}")
+    if not thresholds_path.exists():
+        sys.exit(f"ERROR: thresholds.py not found at expected path: {thresholds_path}")
 
     payload = load_proposal(proposal_path)
     proposed = parse_proposed(payload)
-    current = parse_current_from_file(tiering_path)
+    current = parse_current_from_file(thresholds_path)
 
     print(f"Proposal: {proposal_path}")
-    print(f"Target:   {tiering_path}")
+    print(f"Target:   {thresholds_path}")
     print(f"Source:   {payload.get('source', 'single_window')}")
     print(f"Horizon:  T+{payload.get('horizon', '?')}")
     print_diff(current, proposed)
@@ -195,11 +195,11 @@ def main() -> int:
         print("\nNo changes — proposed values match current. Nothing to write.")
         return 0
 
-    original_content = tiering_path.read_text(encoding="utf-8")
+    original_content = thresholds_path.read_text(encoding="utf-8")
     new_content = apply_to_content(original_content, proposed)
 
-    print("\nWriting updated tiering.py…")
-    tiering_path.write_text(new_content, encoding="utf-8")
+    print("\nWriting updated thresholds.py…")
+    thresholds_path.write_text(new_content, encoding="utf-8")
 
     print("Running pytest…")
     tests_passed = run_tests(root)
@@ -207,14 +207,14 @@ def main() -> int:
     if tests_passed:
         print("\nAll tests passed. Changes applied successfully.")
         print(f"Next step: review the diff, then commit with:")
-        print(f"  git add {TIERING_PATH_RELATIVE}")
+        print(f"  git add {THRESHOLDS_PATH_RELATIVE}")
         horizon = payload.get("horizon", "?")
         print(f"  git commit -m 'feat: apply tuning proposal (T+{horizon})'")
         return 0
     else:
-        print("\nTests FAILED — restoring original tiering.py.")
-        tiering_path.write_text(original_content, encoding="utf-8")
-        print("tiering.py has been restored. No changes were kept.")
+        print("\nTests FAILED — restoring original thresholds.py.")
+        thresholds_path.write_text(original_content, encoding="utf-8")
+        print("thresholds.py has been restored. No changes were kept.")
         return 1
 
 

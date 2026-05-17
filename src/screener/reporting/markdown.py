@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from screener.models import CandidateResult, ScreenRunResult
+from screener.models import CandidateResult, PreviousCandidateOutcome, ScreenRunResult
 
 
 def build_markdown_report(result: ScreenRunResult) -> str:
@@ -14,6 +14,12 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         f"- **Candidate count**: {result.candidate_count}",
         "",
     ]
+
+    if result.previous_candidate_outcomes:
+        lines.append("## Previous Candidate T+1 Outcomes")
+        for outcome in result.previous_candidate_outcomes:
+            lines.append(_format_previous_candidate_outcome(outcome))
+        lines.append("")
 
     if metadata.notes:
         lines.append("## Notes")
@@ -79,6 +85,19 @@ def _provider_status_line(status: dict[str, object]) -> str:
     if status.get("error_kind"):
         parts.append(f"error {status['error_kind']}")
     return " | ".join(parts)
+
+
+def _format_previous_candidate_outcome(outcome: PreviousCandidateOutcome) -> str:
+    heading = outcome.ticker if not outcome.name else f"{outcome.ticker} ({outcome.name})"
+    percent = "n/a" if outcome.percent_return is None else f"{outcome.percent_return:+.2f}%"
+    absolute = "n/a" if outcome.absolute_return is None else f"{outcome.absolute_return:+.2f}"
+    current_close = "n/a" if outcome.current_close is None else f"{outcome.current_close:.2f}"
+    previous_close = "n/a" if outcome.previous_close is None else f"{outcome.previous_close:.2f}"
+    return (
+        f"- **{heading}**: T+1 {percent} ({absolute}) | "
+        f"close {previous_close} → {current_close} | "
+        f"prior tier {outcome.previous_tier or 'n/a'}, score {outcome.previous_score or 'n/a'}"
+    )
 
 
 def _format_candidate_block(candidate: CandidateResult, *, include_tier: bool) -> list[str]:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -24,6 +26,31 @@ def test_parse_run_date_accepts_ny_today_alias() -> None:
 def test_parse_run_date_rejects_path_like_value() -> None:
     with pytest.raises(argparse.ArgumentTypeError):
         run_intraday_window.parse_run_date("../../tmp/owned")
+
+
+def test_main_does_not_create_empty_window_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    output_root = tmp_path / "intraday"
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_intraday_window.py",
+            "--date",
+            "2026-04-21",
+            "--window-id",
+            "open-1",
+            "--output-root",
+            str(output_root),
+            "--skip-install",
+        ],
+    )
+    monkeypatch.setattr(run_intraday_window, "ensure_venv", lambda *args, **kwargs: sys.executable)
+    monkeypatch.setattr(run_intraday_window.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0))
+
+    assert run_intraday_window.main() == 0
+
+    assert not (output_root / "2026-04-21" / "open-1").exists()
 
 
 def test_main_rejects_invalid_date_before_resolving_output_dir(monkeypatch: pytest.MonkeyPatch) -> None:

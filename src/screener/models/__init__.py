@@ -3,6 +3,7 @@
 from .schemas import (
     CandidateResult,
     PipelineContext,
+    PreviousCandidateOutcome,
     RunArtifacts,
     RunMetadata,
     ScreenRunResult,
@@ -13,6 +14,7 @@ from .schemas import (
 __all__ = [
     "CandidateResult",
     "PipelineContext",
+    "PreviousCandidateOutcome",
     "RunArtifacts",
     "RunMetadata",
     "ScreenRunResult",

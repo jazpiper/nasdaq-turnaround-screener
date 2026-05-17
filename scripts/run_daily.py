@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 import venv
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -148,6 +150,40 @@ def update_latest_pointer(output_root: Path, target_dir: Path) -> Path:
     return latest_path
 
 
+def write_cron_health(output_dir: Path, *, run_date: str, exit_code: int, started_at: datetime, completed_at: datetime) -> Path:
+    metadata_path = output_dir / "run-metadata.json"
+    quality_gate = None
+    quality_gate_reasons: list[str] = []
+    run_status = "success" if exit_code == 0 else "failed"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            quality_gate = metadata.get("quality_gate")
+            quality_gate_reasons = list(metadata.get("quality_gate_reasons") or [])
+            run_status = str(metadata.get("run_status") or run_status)
+        except (OSError, json.JSONDecodeError, TypeError):
+            quality_gate_reasons = ["metadata_unreadable"]
+    elif exit_code != 0:
+        quality_gate_reasons = ["screener_subprocess_failed_before_metadata"]
+
+    payload = {
+        "run_date": run_date,
+        "run_status": run_status,
+        "exit_code": exit_code,
+        "started_at": started_at.isoformat(),
+        "completed_at": completed_at.isoformat(),
+        "duration_seconds": round((completed_at - started_at).total_seconds(), 3),
+        "metadata_path": str(metadata_path),
+        "metadata_available": metadata_path.exists(),
+        "quality_gate": quality_gate,
+        "quality_gate_reasons": quality_gate_reasons,
+    }
+    output_dir.mkdir(parents=True, exist_ok=True)
+    health_path = output_dir / "cron-health.json"
+    health_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return health_path
+
+
 def run_screener(
     python_path: Path,
     root: Path,
@@ -240,6 +276,8 @@ def main() -> int:
     output_dir = dated_output_dir(output_root, args.run_date)
 
     python_path = ensure_venv(root, skip_install=args.skip_install)
+    started_at = datetime.now(UTC)
+    health_path: Path | None = None
     exit_code = run_screener(
         python_path,
         root,
@@ -255,7 +293,18 @@ def main() -> int:
         args.overlay_file,
         args.overlay_name,
     )
+    completed_at = datetime.now(UTC)
+    if not args.dry_run:
+        health_path = write_cron_health(
+            output_dir,
+            run_date=args.run_date,
+            exit_code=exit_code,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
     if exit_code != 0:
+        if health_path is not None:
+            print(f"Cron health: {health_path}", file=sys.stderr)
         return exit_code
 
     if not args.dry_run:

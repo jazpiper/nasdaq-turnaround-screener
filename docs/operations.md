@@ -35,6 +35,8 @@ daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-
 - custom ticker daily run은 성공 시 `output/assistant/latest-user-briefing-screener.{json,md}`도 함께 생성해 holdings/watchlist/big-tech용 compact briefing을 자동으로 갱신합니다.
 - raw `screener run --tickers ... --output-dir ...`는 latest pointer를 갱신하지 않으므로, cron 소비 경로와 분리된 output dir을 직접 지정하는 편이 안전합니다.
 - `daily-report.json` 과 `run-metadata.json` 에는 `planned_ticker_count`, `successful_ticker_count`, `failed_ticker_count`, `bars_nonempty_count`, `latest_bar_date_mismatch_count`, `insufficient_history_count`, `planned_tickers`, `market_data_provider_status` 가 함께 기록됩니다.
+- `run-metadata.json` 과 `daily-report.json` 에는 `run_started_at`, `run_completed_at`, `run_duration_seconds`, `quality_gate`, `quality_gate_reasons`, `observability` 도 포함되어 실패/지연/품질 게이트 원인을 cron에서 추적할 수 있습니다.
+- `scripts/run_daily.py` 는 비 dry-run 실행마다 dated output 디렉터리에 `cron-health.json` 을 기록합니다. screener subprocess가 metadata 생성 전에 실패해도 `exit_code`, 실행 시간, `screener_subprocess_failed_before_metadata` reason을 남깁니다.
   - `market_data_provider_status` 는 source/provider별 `role`(`primary`/`fallback`), `status`(`ok`/`partial_success`/`rate_limited`/`failed`), ticker 성공/실패 count, `retry_count`, `used_cache`, `used_stale_cache`, `cooldown_active`, `fallback_provider`, 분류된 `error_kind`만 남깁니다.
   - raw URL, query string, API key, token, credential 원문은 provider status나 report에 기록하지 않습니다.
 - daily run은 `daily-report.json` 옆에 `alert-events.json` 도 함께 생성합니다.

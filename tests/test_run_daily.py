@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,6 +13,7 @@ from scripts.run_daily import (
     resolve_run_date,
     resolve_output_root,
     update_latest_pointer,
+    write_cron_health,
 )
 
 
@@ -101,6 +103,51 @@ def test_update_latest_pointer_exposes_alert_sidecar(tmp_path: Path) -> None:
     latest_path = update_latest_pointer(output_root, target_dir)
 
     assert (latest_path / "alert-events.json").read_text(encoding="utf-8") == '{"phase":"final"}\n'
+
+
+def test_write_cron_health_records_quality_gate_from_metadata(tmp_path: Path) -> None:
+    output_dir = tmp_path / "daily" / "2026-05-01"
+    output_dir.mkdir(parents=True)
+    (output_dir / "run-metadata.json").write_text(
+        json.dumps({"run_status": "success", "quality_gate": "warn", "quality_gate_reasons": ["failed_ticker_count_gt_5"]}),
+        encoding="utf-8",
+    )
+    started_at = datetime(2026, 5, 1, 12, 0, tzinfo=ZoneInfo("UTC"))
+    completed_at = datetime(2026, 5, 1, 12, 0, 7, tzinfo=ZoneInfo("UTC"))
+
+    health_path = write_cron_health(
+        output_dir,
+        run_date="2026-05-01",
+        exit_code=0,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+
+    payload = json.loads(health_path.read_text(encoding="utf-8"))
+    assert payload["run_status"] == "success"
+    assert payload["quality_gate"] == "warn"
+    assert payload["quality_gate_reasons"] == ["failed_ticker_count_gt_5"]
+    assert payload["duration_seconds"] == 7.0
+    assert payload["metadata_available"] is True
+
+
+def test_write_cron_health_records_pre_metadata_failure(tmp_path: Path) -> None:
+    started_at = datetime(2026, 5, 1, 12, 0, tzinfo=ZoneInfo("UTC"))
+    completed_at = datetime(2026, 5, 1, 12, 0, 3, tzinfo=ZoneInfo("UTC"))
+
+    health_path = write_cron_health(
+        tmp_path,
+        run_date="2026-05-01",
+        exit_code=2,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+
+    payload = json.loads(health_path.read_text(encoding="utf-8"))
+    assert payload["run_status"] == "failed"
+    assert payload["exit_code"] == 2
+    assert payload["quality_gate_reasons"] == ["screener_subprocess_failed_before_metadata"]
+    assert payload["metadata_available"] is False
 
 
 def test_ensure_venv_installs_with_uv_sync(monkeypatch, tmp_path: Path) -> None:
