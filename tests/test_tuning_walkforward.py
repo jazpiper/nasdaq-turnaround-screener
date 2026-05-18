@@ -185,6 +185,20 @@ def test_write_proposal_json_from_walkforward_no_proposal(tmp_path: Path) -> Non
     assert payload["status"] == "no_proposal"
 
 
+def test_walkforward_proposal_json_includes_apply_commands(tmp_path: Path) -> None:
+    observations = _make_observations(n_trading_days=10)  # too short → no proposal, but still actionable
+    result = walk_forward(observations, horizon=10, train_days=90, eval_days=20)
+    path = write_proposal_json_from_walkforward(tmp_path / "tuning-proposal.json", result)
+    import json
+    payload = json.loads(path.read_text())
+
+    assert payload["apply"] == {
+        "target": "src/screener/scoring/thresholds.py",
+        "dry_run_command": f"uv run python scripts/apply_tuning_proposal.py {path.as_posix()}",
+        "write_command": f"uv run python scripts/apply_tuning_proposal.py {path.as_posix()} --write",
+    }
+
+
 def test_write_proposal_json_from_walkforward_explains_invalid_oos_rejection(tmp_path: Path) -> None:
     result = _walk_forward_with_invalid_oos_windows()
     path = write_proposal_json_from_walkforward(tmp_path / "proposal.json", result)
@@ -201,6 +215,17 @@ def test_write_diff_markdown_from_walkforward_no_proposal(tmp_path: Path) -> Non
     path = write_diff_markdown_from_walkforward(tmp_path / "diff.md", result)
     assert path.exists()
     assert "no proposal" in path.read_text()
+
+
+def test_walkforward_diff_markdown_includes_apply_commands(tmp_path: Path) -> None:
+    observations = _make_observations(n_trading_days=10)
+    result = walk_forward(observations, horizon=10, train_days=90, eval_days=20)
+    path = write_diff_markdown_from_walkforward(tmp_path / "tuning-diff.md", result)
+    content = path.read_text()
+
+    assert "## Apply Command" in content
+    assert f"uv run python scripts/apply_tuning_proposal.py {(path.parent / 'tuning-proposal.json').as_posix()}" in content
+    assert "--write" in content
 
 
 def test_write_diff_markdown_from_walkforward_explains_invalid_oos_rejection(tmp_path: Path) -> None:

@@ -56,7 +56,7 @@ Scoring lives in `scoring/ranking.py` with threshold constants in `scoring/thres
 
 **`PipelineContext`**: immutable run metadata (date, output_dir, dry_run flag) threaded through every step. Dry-run skips all writes but executes scoring normally.
 
-**`Settings`**: resolved from env vars with OpenClaw secrets (`~/.openclaw/secrets.json`) as fallback. Relevant vars: `TWELVE_DATA_API_KEY`, `ORACLE_DB_*`, `SCREENER_MARKET_DATA_PROVIDER`, `SCREENER_DAILY_INTRADAY_SOURCE_MODE`, `SCREENER_EARNINGS_CALENDAR_PATH`, `SCREENER_ORACLE_SQL_ENABLED`.
+**`Settings`**: resolved from env vars with OpenClaw secrets (`~/.openclaw/secrets.json`) as fallback. Relevant vars: `SCREENER_MARKET_DATA_PROVIDER`, `TWELVE_DATA_API_KEY`, `TWELVE_DATA_BASE_URL`, `FINNHUB_API_KEY`/`SCREENER_FINNHUB_API_KEY`, `FMP_API_KEY`/`FINANCIAL_MODELING_PREP_API_KEY`/`SCREENER_FMP_API_KEY`, `ORACLE_DB_*`, `SCREENER_ORACLE_SQL_*`, `SCREENER_DAILY_INTRADAY_SOURCE_MODE`, `SCREENER_INTRADAY_*`, `SCREENER_EARNINGS_CALENDAR_PATH`, `SCREENER_ORACLE_SQL_ENABLED`, `SCREENER_OPENCLAW_SECRETS_PATH`/`OPENCLAW_SECRETS_PATH`.
 
 **Alert state machine** (`alerts/`): `AlertState` tracks prior tier/score/rank per ticker. `determine_change_status()` classifies events as `new` / `upgraded` / `downgraded` / `same`. `alert-events.json` under `output/daily/latest/` is the stable consumer entrypoint. Quality gate (`evaluate_daily_quality_gate()`) blocks alert emission if >20 tickers failed data fetch or >10 date mismatches.
 

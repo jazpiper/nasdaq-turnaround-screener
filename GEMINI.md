@@ -23,32 +23,32 @@ This project is a personal research screener designed to scan NASDAQ-100 stocks 
 
 ### Setup
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+uv sync --extra dev
 ```
+
+`uv.lock` is committed so local, cron, and CI-like runs resolve the same dependency set.
 
 ### Key Commands
 - **Run Daily Screener:**
   ```bash
-  python -m screener.cli.main run --date 2026-04-22
+  uv run python -m screener.cli.main run --date 2026-04-22
   ```
 - **Intraday Collection:**
   ```bash
-  python -m screener.cli.main collect-window --date 2026-04-22 --window-index 0 --total-windows 1
+  uv run python -m screener.cli.main collect-window --date 2026-04-22 --window-index 0 --total-windows 1
   ```
 - **Initialize Database:**
   ```bash
-  python -m screener.cli.main init-oracle-schema
+  uv run python -m screener.cli.main init-oracle-schema
   ```
 - **Run Backtest:**
   ```bash
-  python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-22
+  uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-22
   ```
 
 ### Testing
 ```bash
-pytest
+uv run pytest
 ```
 
 ## Development Conventions

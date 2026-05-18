@@ -5,6 +5,7 @@ from screener.models import ScreenRunResult
 
 def build_json_report(result: ScreenRunResult) -> dict:
     return {
+        "schema_version": 1,
         "date": result.metadata.run_date.isoformat(),
         "generated_at": result.metadata.generated_at.isoformat(),
         "universe": result.metadata.universe,
@@ -21,6 +22,7 @@ def build_json_report(result: ScreenRunResult) -> dict:
         "data_failures": list(result.metadata.data_failures),
         "market_data_provider_status": [dict(status) for status in result.metadata.market_data_provider_status],
         "reliability_label": result.metadata.reliability_label,
+        "market_data_reliability": result.metadata.reliability_label,
         "run_started_at": result.metadata.run_started_at.isoformat() if result.metadata.run_started_at else None,
         "run_completed_at": result.metadata.run_completed_at.isoformat() if result.metadata.run_completed_at else None,
         "run_duration_seconds": result.metadata.run_duration_seconds,

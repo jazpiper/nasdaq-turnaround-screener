@@ -1,6 +1,8 @@
 """Core models for screener runs."""
 
 from .schemas import (
+    AssistantBriefingInput,
+    AssistantBriefingSourceContract,
     CandidateResult,
     PipelineContext,
     PreviousCandidateOutcome,
@@ -12,6 +14,8 @@ from .schemas import (
 )
 
 __all__ = [
+    "AssistantBriefingInput",
+    "AssistantBriefingSourceContract",
     "CandidateResult",
     "PipelineContext",
     "PreviousCandidateOutcome",

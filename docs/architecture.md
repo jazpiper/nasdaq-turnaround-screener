@@ -32,7 +32,7 @@ CLI build-assistant-briefing
   -> write output/assistant/latest-user-briefing-screener.{json,md}
 ```
 
-Assistant briefing artifacts are generated from existing daily screener output only. They do not fetch market data, call Oracle, or change the daily report / alert sidecar schemas. The default artifact names remain `latest-user-briefing-screener.{json,md}`; `--artifact-basename` can write a separate compact briefing such as `latest-user-watchlist-screener.{json,md}`. The signals are decision-support only and not buy/sell advice.
+Assistant briefing artifacts are generated from existing daily screener output only. They do not fetch market data, call Oracle, or change the daily report / alert sidecar schemas. The default artifact names remain `latest-user-briefing-screener.{json,md}`; `--artifact-basename` can write a separate compact briefing such as `latest-user-watchlist-screener.{json,md}`. The signals are decision-support only, and the human-readable briefing uses 관심/검토/보류 review stages instead of buy/sell language.
 
 ### Universe Selection
 - Default daily screening remains NASDAQ-100. With no custom ticker option, `Settings.universe_tickers` is `None`, `RunMetadata.universe` stays `NASDAQ-100`, and the existing report/metadata/alert artifact schema is unchanged.

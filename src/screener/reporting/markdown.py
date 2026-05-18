@@ -3,6 +3,17 @@ from __future__ import annotations
 from screener.models import CandidateResult, PreviousCandidateOutcome, ScreenRunResult
 
 
+_REVIEW_STAGE_LABELS = {
+    "buy-review": "검토",
+    "watchlist": "관심",
+    "avoid/high-risk": "보류",
+}
+
+
+def _review_stage_label(tier: str | None) -> str:
+    return _REVIEW_STAGE_LABELS.get(str(tier or ""), "보류")
+
+
 def build_markdown_report(result: ScreenRunResult) -> str:
     metadata = result.metadata
     lines = [
@@ -31,35 +42,32 @@ def build_markdown_report(result: ScreenRunResult) -> str:
         lines.extend(f"- {failure}" for failure in metadata.data_failures)
         lines.append("")
 
-    if metadata.market_data_provider_status:
-        lines.append("## Market Data Provider Status")
-        lines.extend(_provider_status_line(status) for status in metadata.market_data_provider_status)
+    if metadata.market_data_provider_status or metadata.reliability_label:
+        lines.append("## Market Data Reliability")
+        if metadata.market_data_provider_status:
+            lines.extend(_provider_status_line(status) for status in metadata.market_data_provider_status)
         if metadata.reliability_label:
             lines.append(f"- **Reliability label**: {metadata.reliability_label}")
         lines.append("")
 
-    if not result.candidates:
-        lines.append("## Buy Review Candidates")
-        lines.append("- No buy-review candidates.")
+    lines.append("## Review Candidates")
+    review_candidates = [candidate for candidate in result.candidates if candidate.tier == "buy-review"]
+    if not review_candidates:
+        lines.append("- No review candidates.")
         lines.append("")
-        lines.append("## Candidates")
+    else:
+        for candidate in review_candidates:
+            lines.extend(_format_candidate_block(candidate, include_tier=False))
+
+    lines.append("## Screening Review List")
+    if not result.candidates:
         lines.append("- No candidates matched the current screening rules.")
         return "\n".join(lines) + "\n"
 
-    buy_review_candidates = [candidate for candidate in result.candidates if candidate.tier == "buy-review"]
-    lines.append("## Buy Review Candidates")
-    if not buy_review_candidates:
-        lines.append("- No buy-review candidates.")
-        lines.append("")
-    else:
-        for candidate in buy_review_candidates:
-            lines.extend(_format_candidate_block(candidate, include_tier=False))
-
-    lines.append("## Candidates")
     for candidate in result.candidates:
-        lines.extend(_format_candidate_block(candidate, include_tier=True))
+        lines.extend(_format_candidate_block(candidate, include_tier=False))
 
-    return "\n".join(lines)
+    return "\n".join(lines) + "\n"
 
 
 def _provider_status_line(status: dict[str, object]) -> str:
@@ -103,6 +111,7 @@ def _format_previous_candidate_outcome(outcome: PreviousCandidateOutcome) -> str
 def _format_candidate_block(candidate: CandidateResult, *, include_tier: bool) -> list[str]:
     heading = candidate.ticker if not candidate.name else f"{candidate.ticker} ({candidate.name})"
     lines = [f"### {heading}"]
+    lines.append(f"- **Review stage**: {_review_stage_label(candidate.tier)}")
     lines.append(f"- **Score**: {candidate.score}")
     lines.append(_risk_adjusted_score_line(candidate.risk_adjusted_score))
     if include_tier:

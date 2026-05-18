@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AlertSource(BaseModel):
@@ -21,6 +21,14 @@ class AlertSummary(BaseModel):
     regime_gate: str = "unknown"
     regime_watchlist_cap: int | None = None
     regime_gate_reason: str | None = None
+    sector_concentration_gate: str = "pass"
+    sector_concentration_cap: int | None = None
+    suppressed_by_sector_concentration_count: int = 0
+    correlation_gate: str = "pass"
+    correlation_group_cap: int | None = None
+    suppressed_by_correlation_count: int = 0
+    market_data_reliability: str | None = None
+    market_data_provider_status: list[dict[str, object]] = Field(default_factory=list)
 
 
 class AlertEvent(BaseModel):

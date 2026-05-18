@@ -7,11 +7,14 @@ from zoneinfo import ZoneInfo
 
 from scripts import run_daily
 from scripts.run_daily import (
+    DEFAULT_ASSISTANT_USER_TICKERS,
     DEFAULT_OUTPUT_ROOT,
     LATEST_NAME,
     dated_output_dir,
+    resolve_assistant_user_tickers,
     resolve_run_date,
     resolve_output_root,
+    update_cron_status_pointers,
     update_latest_pointer,
     write_cron_health,
 )
@@ -79,6 +82,36 @@ def test_resolve_output_root_sanitizes_custom_universe_name() -> None:
     ) == Path("output/daily-personal-watchlist-tech")
 
 
+def test_resolve_assistant_user_tickers_uses_default_for_core_universe() -> None:
+    assert (
+        resolve_assistant_user_tickers(
+            universe_tickers=None,
+            assistant_user_tickers=DEFAULT_ASSISTANT_USER_TICKERS,
+        )
+        == DEFAULT_ASSISTANT_USER_TICKERS
+    )
+
+
+def test_resolve_assistant_user_tickers_uses_custom_universe_when_not_overridden() -> None:
+    assert (
+        resolve_assistant_user_tickers(
+            universe_tickers="TSLA,NVDA",
+            assistant_user_tickers=DEFAULT_ASSISTANT_USER_TICKERS,
+        )
+        == "TSLA,NVDA"
+    )
+
+
+def test_resolve_assistant_user_tickers_preserves_explicit_override() -> None:
+    assert (
+        resolve_assistant_user_tickers(
+            universe_tickers="TSLA,NVDA",
+            assistant_user_tickers="AAPL,MSFT",
+        )
+        == "AAPL,MSFT"
+    )
+
+
 def test_update_latest_pointer_creates_symlink(tmp_path: Path) -> None:
     output_root = tmp_path / "daily"
     target_dir = output_root / "2026-04-21"
@@ -129,6 +162,9 @@ def test_write_cron_health_records_quality_gate_from_metadata(tmp_path: Path) ->
     assert payload["quality_gate_reasons"] == ["failed_ticker_count_gt_5"]
     assert payload["duration_seconds"] == 7.0
     assert payload["metadata_available"] is True
+    assert payload["observability"] == {}
+    assert payload["attention_required"] is True
+    assert payload["attention_reasons"] == ["quality_gate_warn", "failed_ticker_count_gt_5"]
 
 
 def test_write_cron_health_records_pre_metadata_failure(tmp_path: Path) -> None:
@@ -148,6 +184,56 @@ def test_write_cron_health_records_pre_metadata_failure(tmp_path: Path) -> None:
     assert payload["exit_code"] == 2
     assert payload["quality_gate_reasons"] == ["screener_subprocess_failed_before_metadata"]
     assert payload["metadata_available"] is False
+    assert payload["attention_required"] is True
+    assert payload["attention_reasons"] == ["exit_code_nonzero", "screener_subprocess_failed_before_metadata"]
+
+
+def test_update_cron_status_pointers_records_latest_and_last_success(tmp_path: Path) -> None:
+    output_dir = tmp_path / "daily" / "2026-05-01"
+    started_at = datetime(2026, 5, 1, 12, 0, tzinfo=ZoneInfo("UTC"))
+    completed_at = datetime(2026, 5, 1, 12, 2, tzinfo=ZoneInfo("UTC"))
+    health_path = write_cron_health(
+        output_dir,
+        run_date="2026-05-01",
+        exit_code=0,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+
+    latest_health_path, last_success_path = update_cron_status_pointers(tmp_path / "daily", health_path)
+
+    assert latest_health_path == tmp_path / "daily" / "latest-cron-health.json"
+    assert json.loads(latest_health_path.read_text(encoding="utf-8"))["exit_code"] == 0
+    assert last_success_path is not None
+    assert last_success_path == tmp_path / "daily" / "last-success.json"
+    last_success = json.loads(last_success_path.read_text(encoding="utf-8"))
+    assert last_success == {
+        "completed_at": completed_at.isoformat(),
+        "cron_health_path": str(health_path),
+        "duration_seconds": 120.0,
+        "output_dir": str(output_dir),
+        "run_date": "2026-05-01",
+    }
+
+
+def test_update_cron_status_pointers_does_not_overwrite_last_success_on_failure(tmp_path: Path) -> None:
+    output_root = tmp_path / "daily"
+    existing_success = output_root / "last-success.json"
+    existing_success.parent.mkdir(parents=True)
+    existing_success.write_text('{"run_date":"2026-04-30"}\n', encoding="utf-8")
+    health_path = write_cron_health(
+        output_root / "2026-05-01",
+        run_date="2026-05-01",
+        exit_code=1,
+        started_at=datetime(2026, 5, 1, 12, 0, tzinfo=ZoneInfo("UTC")),
+        completed_at=datetime(2026, 5, 1, 12, 1, tzinfo=ZoneInfo("UTC")),
+    )
+
+    latest_health_path, last_success_path = update_cron_status_pointers(output_root, health_path)
+
+    assert json.loads(latest_health_path.read_text(encoding="utf-8"))["exit_code"] == 1
+    assert last_success_path is None
+    assert existing_success.read_text(encoding="utf-8") == '{"run_date":"2026-04-30"}\n'
 
 
 def test_ensure_venv_installs_with_uv_sync(monkeypatch, tmp_path: Path) -> None:

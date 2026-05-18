@@ -21,7 +21,9 @@ from screener.dates import resolve_ny_run_date
 
 DEFAULT_OUTPUT_ROOT = Path("output/daily")
 DEFAULT_CUSTOM_UNIVERSE_NAME = "user-watchlist"
+DEFAULT_ASSISTANT_USER_TICKERS = "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA"
 LATEST_NAME = "latest"
+DEFAULT_CRON_DELAY_WARNING_SECONDS = 15 * 60
 
 
 def resolve_run_date(value: str | None, *, clock=None) -> str:
@@ -56,6 +58,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overlay-tickers", default=None, help="Comma-separated hot-sector overlay tickers to append to the core universe.")
     parser.add_argument("--overlay-file", type=Path, default=None, help="File containing overlay tickers as JSON, CSV, or newline-separated text.")
     parser.add_argument("--overlay-name", default=None, help="Label used when naming outputs for an overlay-backed universe.")
+    parser.add_argument(
+        "--skip-assistant-briefing",
+        action="store_true",
+        help="Do not build compact assistant briefing artifacts after a successful non-dry run.",
+    )
+    parser.add_argument(
+        "--assistant-user-tickers",
+        default=DEFAULT_ASSISTANT_USER_TICKERS,
+        help="Comma-separated holdings/watchlist tickers for assistant briefing artifacts. Custom --tickers runs use --tickers unless this is explicitly set.",
+    )
+    parser.add_argument(
+        "--assistant-output-dir",
+        type=Path,
+        default=Path("output/assistant"),
+        help="Directory for compact assistant briefing artifacts.",
+    )
+    parser.add_argument(
+        "--assistant-artifact-basename",
+        default=None,
+        help="Optional assistant briefing artifact basename; writes <basename>.json and <basename>.md.",
+    )
     return parser.parse_args()
 
 
@@ -123,6 +146,12 @@ def _safe_output_root_suffix(value: str) -> str:
     return collapsed or DEFAULT_CUSTOM_UNIVERSE_NAME
 
 
+def resolve_assistant_user_tickers(*, universe_tickers: str | None, assistant_user_tickers: str | None) -> str:
+    if assistant_user_tickers and assistant_user_tickers != DEFAULT_ASSISTANT_USER_TICKERS:
+        return assistant_user_tickers
+    return universe_tickers or (assistant_user_tickers or DEFAULT_ASSISTANT_USER_TICKERS)
+
+
 def update_latest_pointer(output_root: Path, target_dir: Path) -> Path:
     latest_path = output_root / LATEST_NAME
     if latest_path.exists() or latest_path.is_symlink():
@@ -152,36 +181,98 @@ def update_latest_pointer(output_root: Path, target_dir: Path) -> Path:
 
 def write_cron_health(output_dir: Path, *, run_date: str, exit_code: int, started_at: datetime, completed_at: datetime) -> Path:
     metadata_path = output_dir / "run-metadata.json"
+    metadata_available = metadata_path.exists()
     quality_gate = None
     quality_gate_reasons: list[str] = []
+    observability: dict[str, object] = {}
     run_status = "success" if exit_code == 0 else "failed"
-    if metadata_path.exists():
+    metadata_read_error: str | None = None
+    if metadata_available:
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             quality_gate = metadata.get("quality_gate")
             quality_gate_reasons = list(metadata.get("quality_gate_reasons") or [])
             run_status = str(metadata.get("run_status") or run_status)
-        except (OSError, json.JSONDecodeError, TypeError):
+            if isinstance(metadata.get("observability"), dict):
+                observability = metadata["observability"]
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            metadata_read_error = exc.__class__.__name__
             quality_gate_reasons = ["metadata_unreadable"]
     elif exit_code != 0:
         quality_gate_reasons = ["screener_subprocess_failed_before_metadata"]
 
+    duration_seconds = round((completed_at - started_at).total_seconds(), 3)
+    attention_reasons = _cron_attention_reasons(
+        exit_code=exit_code,
+        quality_gate=quality_gate,
+        quality_gate_reasons=quality_gate_reasons,
+        duration_seconds=duration_seconds,
+        metadata_read_error=metadata_read_error,
+    )
     payload = {
         "run_date": run_date,
         "run_status": run_status,
         "exit_code": exit_code,
         "started_at": started_at.isoformat(),
         "completed_at": completed_at.isoformat(),
-        "duration_seconds": round((completed_at - started_at).total_seconds(), 3),
+        "duration_seconds": duration_seconds,
         "metadata_path": str(metadata_path),
-        "metadata_available": metadata_path.exists(),
+        "metadata_available": metadata_available,
+        "metadata_read_error": metadata_read_error,
         "quality_gate": quality_gate,
         "quality_gate_reasons": quality_gate_reasons,
+        "observability": observability,
+        "attention_required": bool(attention_reasons),
+        "attention_reasons": attention_reasons,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     health_path = output_dir / "cron-health.json"
     health_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return health_path
+
+
+def update_cron_status_pointers(output_root: Path, health_path: Path) -> tuple[Path, Path | None]:
+    latest_health_path = output_root / "latest-cron-health.json"
+    health_text = health_path.read_text(encoding="utf-8")
+    latest_health_path.write_text(health_text, encoding="utf-8")
+
+    health = json.loads(health_text)
+    if int(health.get("exit_code", 1)) != 0:
+        return latest_health_path, None
+
+    last_success_path = output_root / "last-success.json"
+    last_success = {
+        "run_date": health.get("run_date"),
+        "completed_at": health.get("completed_at"),
+        "duration_seconds": health.get("duration_seconds"),
+        "cron_health_path": str(health_path),
+        "output_dir": str(health_path.parent),
+    }
+    last_success_path.write_text(json.dumps(last_success, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return latest_health_path, last_success_path
+
+
+def _cron_attention_reasons(
+    *,
+    exit_code: int,
+    quality_gate: object,
+    quality_gate_reasons: list[str],
+    duration_seconds: float,
+    metadata_read_error: str | None,
+) -> list[str]:
+    reasons: list[str] = []
+    if exit_code != 0:
+        reasons.append("exit_code_nonzero")
+    if quality_gate in {"warn", "block"}:
+        reasons.append(f"quality_gate_{quality_gate}")
+    if metadata_read_error is not None:
+        reasons.append("metadata_unreadable")
+    if duration_seconds > DEFAULT_CRON_DELAY_WARNING_SECONDS:
+        reasons.append("duration_seconds_gt_900")
+    for reason in quality_gate_reasons:
+        if reason not in reasons:
+            reasons.append(reason)
+    return reasons
 
 
 def run_screener(
@@ -302,6 +393,7 @@ def main() -> int:
             started_at=started_at,
             completed_at=completed_at,
         )
+        update_cron_status_pointers(output_root, health_path)
     if exit_code != 0:
         if health_path is not None:
             print(f"Cron health: {health_path}", file=sys.stderr)
@@ -312,13 +404,17 @@ def main() -> int:
         print(f"Daily output: {output_dir}")
         print(f"Latest output: {latest_path}")
 
-    if args.universe_tickers is not None and not args.dry_run:
+    if not args.skip_assistant_briefing and not args.dry_run:
         briefing_exit_code = run_assistant_briefing(
             python_path,
             root,
             output_dir / "daily-report.json",
-            root / "output" / "assistant",
-            args.universe_tickers,
+            (root / args.assistant_output_dir).resolve(),
+            resolve_assistant_user_tickers(
+                universe_tickers=args.universe_tickers,
+                assistant_user_tickers=args.assistant_user_tickers,
+            ),
+            artifact_basename=args.assistant_artifact_basename,
         )
         if briefing_exit_code != 0:
             return briefing_exit_code

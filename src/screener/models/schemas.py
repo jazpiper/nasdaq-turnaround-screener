@@ -106,3 +106,29 @@ class RunArtifacts:
     metadata_path: Path | None = None
     alert_events_path: Path | None = None
     stable_alert_events_path: Path | None = None
+
+
+class AssistantBriefingSourceContract(BaseModel):
+    source: str
+    source_report_path: str | None = None
+    freshness: str
+    reliability_label: str
+    market_data_reliability: str | None = None
+
+
+class AssistantBriefingInput(BaseModel):
+    schema_version: int = 2
+    source: str = "nasdaq-turnaround-screener"
+    generated_at: datetime
+    screener_date: str | None = None
+    source_report_path: str | None = None
+    source_contract: AssistantBriefingSourceContract
+    source_freshness: str | None = None
+    source_reliability: str | None = None
+    universe: str | None = None
+    data_quality: dict[str, object] = Field(default_factory=dict)
+    user_tickers: list[dict[str, object]] = Field(default_factory=list)
+    missing_user_tickers: list[dict[str, str]] = Field(default_factory=list)
+    top_candidates: list[dict[str, object]] = Field(default_factory=list)
+    overlay_candidates: list[dict[str, object]] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)

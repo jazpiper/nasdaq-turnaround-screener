@@ -20,6 +20,26 @@ from screener.reporting.assistant_briefing import (
     parse_user_tickers,
     write_assistant_briefing,
 )
+from screener.reporting.overlay_universe_report import (
+    DEFAULT_ARTIFACT_BASENAME as DEFAULT_OVERLAY_REPORT_BASENAME,
+    DEFAULT_BACKTEST_SUMMARY_PATH as DEFAULT_OVERLAY_BACKTEST_SUMMARY_PATH,
+    DEFAULT_BASELINE_DAILY_REPORT_PATH,
+    DEFAULT_OVERLAY_DAILY_REPORT_PATH,
+    DEFAULT_OVERLAY_METADATA_PATH,
+    DEFAULT_REPORT_OUTPUT_DIR,
+    load_and_build_overlay_universe_report,
+    write_overlay_universe_report,
+)
+from screener.reporting.performance_dashboard import (
+    DEFAULT_BACKTEST_SUMMARY_PATH,
+    DEFAULT_DASHBOARD_OUTPUT_DIR,
+    DEFAULT_TUNING_PROPOSAL_PATH,
+    DEFAULT_TUNING_WALKFORWARD_PATH,
+    build_performance_dashboard_markdown,
+    build_performance_dashboard_payload,
+    load_json_artifact,
+    write_performance_dashboard,
+)
 from screener.storage import OracleSqlStorage, OracleSqlStorageError
 from screener.storage.files import ensure_directory
 from screener.tuning import TierThresholdsGrid, tune_single_window, walk_forward
@@ -272,6 +292,164 @@ def build_assistant_briefing(
         raise typer.Exit(code=2) from exc
     typer.echo(f"Assistant briefing JSON: {json_path}")
     typer.echo(f"Assistant briefing markdown: {markdown_path}")
+
+
+@app.command("performance-dashboard")
+def performance_dashboard(
+    backtest_summary_path: Path = typer.Option(
+        DEFAULT_BACKTEST_SUMMARY_PATH,
+        "--backtest-summary-path",
+        help="Source backtest summary JSON artifact.",
+    ),
+    tuning_proposal_path: Path = typer.Option(
+        DEFAULT_TUNING_PROPOSAL_PATH,
+        "--tuning-proposal-path",
+        help="Optional tuning proposal JSON artifact.",
+    ),
+    tuning_walkforward_path: Path = typer.Option(
+        DEFAULT_TUNING_WALKFORWARD_PATH,
+        "--tuning-walkforward-path",
+        help="Optional walk-forward tuning JSON artifact.",
+    ),
+    output_dir: Path = typer.Option(
+        DEFAULT_DASHBOARD_OUTPUT_DIR,
+        "--output-dir",
+        help="Directory for dashboard artifacts.",
+    ),
+    dry_run: bool = typer.Option(False, help="Build the dashboard without writing artifacts."),
+) -> None:
+    try:
+        backtest_summary = load_json_artifact(backtest_summary_path, required=True)
+    except FileNotFoundError as exc:
+        typer.echo(f"Backtest summary not found: {backtest_summary_path}", err=True)
+        raise typer.Exit(code=1) from exc
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Backtest summary is not valid JSON: {backtest_summary_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        typer.echo(f"Backtest summary could not be read: {backtest_summary_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    try:
+        tuning_proposal = load_json_artifact(tuning_proposal_path)
+        tuning_walkforward = load_json_artifact(tuning_walkforward_path)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Tuning artifact is not valid JSON: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        typer.echo(f"Tuning artifact could not be read: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    if backtest_summary is None:
+        typer.echo(f"Backtest summary not found: {backtest_summary_path}", err=True)
+        raise typer.Exit(code=1)
+
+    payload = build_performance_dashboard_payload(
+        backtest_summary,
+        generated_at=datetime.now(timezone.utc),
+        backtest_summary_path=backtest_summary_path,
+        tuning_proposal=tuning_proposal,
+        tuning_walkforward=tuning_walkforward,
+        tuning_proposal_path=tuning_proposal_path,
+        tuning_walkforward_path=tuning_walkforward_path,
+        output_dir=output_dir,
+    )
+    markdown = build_performance_dashboard_markdown(payload)
+
+    typer.echo(f"Backtest summary: {backtest_summary_path}")
+    typer.echo(f"Trading days: {payload['backtest'].get('trading_day_count', 'n/a')}")
+    typer.echo(f"Candidate observations: {payload['backtest'].get('candidate_observation_count', 'n/a')}")
+    typer.echo(f"Tuning status: {payload['tuning'].get('status', 'missing')}")
+    if dry_run:
+        typer.echo("Artifacts skipped (--dry-run).")
+        return
+
+    json_path, markdown_path = write_performance_dashboard(payload, markdown, output_dir)
+    typer.echo(f"Dashboard JSON: {json_path}")
+    typer.echo(f"Dashboard markdown: {markdown_path}")
+
+
+@app.command("overlay-universe-report")
+def overlay_universe_report(
+    baseline_report_path: Path = typer.Option(
+        DEFAULT_BASELINE_DAILY_REPORT_PATH,
+        "--baseline-report-path",
+        help="Source baseline daily-report.json artifact.",
+    ),
+    overlay_report_path: Path = typer.Option(
+        DEFAULT_OVERLAY_DAILY_REPORT_PATH,
+        "--overlay-report-path",
+        help="Source overlay-backed daily-report.json artifact.",
+    ),
+    overlay_metadata_path: Path = typer.Option(
+        DEFAULT_OVERLAY_METADATA_PATH,
+        "--overlay-metadata-path",
+        help="Source hot-sector overlay metadata artifact.",
+    ),
+    backtest_summary_path: Path = typer.Option(
+        DEFAULT_OVERLAY_BACKTEST_SUMMARY_PATH,
+        "--backtest-summary-path",
+        help="Optional backtest summary JSON artifact.",
+    ),
+    output_dir: Path = typer.Option(
+        DEFAULT_REPORT_OUTPUT_DIR,
+        "--output-dir",
+        help="Directory for overlay comparison artifacts.",
+    ),
+    dry_run: bool = typer.Option(False, help="Build the report without writing artifacts."),
+) -> None:
+    try:
+        payload, markdown = load_and_build_overlay_universe_report(
+            baseline_report_path=baseline_report_path,
+            overlay_report_path=overlay_report_path,
+            overlay_metadata_path=overlay_metadata_path,
+            backtest_summary_path=backtest_summary_path,
+            output_dir=output_dir,
+            generated_at=datetime.now(timezone.utc),
+        )
+    except FileNotFoundError as exc:
+        message = str(exc)
+        missing_path = baseline_report_path
+        if str(overlay_report_path) in message:
+            missing_path = overlay_report_path
+        elif str(overlay_metadata_path) in message:
+            missing_path = overlay_metadata_path
+        elif backtest_summary_path is not None and str(backtest_summary_path) in message:
+            missing_path = backtest_summary_path
+        typer.echo(f"Overlay report source not found: {missing_path}", err=True)
+        raise typer.Exit(code=1) from exc
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Overlay report source is not valid JSON: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        typer.echo(f"Overlay report source could not be read: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    comparison = payload["comparison"]
+    deltas = comparison["deltas"]
+    typer.echo(f"Baseline report: {baseline_report_path}")
+    typer.echo(f"Overlay report: {overlay_report_path}")
+    typer.echo(
+        "Comparison: "
+        f"planned={comparison['baseline'].get('planned_ticker_count', 'n/a')}→{comparison['overlay'].get('planned_ticker_count', 'n/a')} "
+        f"({deltas.get('planned_ticker_count', 'n/a')}), "
+        f"candidates={comparison['baseline'].get('candidate_count', 'n/a')}→{comparison['overlay'].get('candidate_count', 'n/a')} "
+        f"({deltas.get('candidate_count', 'n/a')})"
+    )
+    typer.echo(f"Overlay sectors: {', '.join(payload['overlay'].get('selected_sectors', [])) or 'n/a'}")
+    typer.echo(f"Overlay tickers: {', '.join(payload['overlay'].get('tickers', [])) or 'n/a'}")
+    if dry_run:
+        typer.echo("Artifacts skipped (--dry-run).")
+        return
+
+    json_path, markdown_path = write_overlay_universe_report(
+        payload,
+        markdown,
+        output_dir,
+        artifact_basename=DEFAULT_OVERLAY_REPORT_BASENAME,
+    )
+    typer.echo(f"Overlay report JSON: {json_path}")
+    typer.echo(f"Overlay report markdown: {markdown_path}")
 
 
 @app.command("init-oracle-schema")

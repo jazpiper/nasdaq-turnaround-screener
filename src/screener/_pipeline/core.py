@@ -312,7 +312,28 @@ def _daily_quality_gate_reasons(metadata: RunMetadata) -> list[str]:
     return reasons
 
 
+def _safe_int(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
 def _build_run_observability(metadata: RunMetadata) -> dict[str, object]:
+    planned_ticker_count = max(metadata.planned_ticker_count, 1)
+    provider_issues = [
+        status
+        for status in metadata.market_data_provider_status
+        if status.get("status") not in {None, "ok", "success"}
+        or _safe_int(status.get("failed_ticker_count")) > 0
+        or bool(status.get("rate_limited"))
+    ]
     return {
         "run_status": metadata.run_status,
         "quality_gate": metadata.quality_gate,
@@ -322,12 +343,22 @@ def _build_run_observability(metadata: RunMetadata) -> dict[str, object]:
             "failed_tickers": metadata.failed_ticker_count,
             "latest_bar_date_mismatches": metadata.latest_bar_date_mismatch_count,
             "insufficient_history": metadata.insufficient_history_count,
+            "provider_issues": len(provider_issues),
+        },
+        "failure_rates": {
+            "failed_ticker_ratio": round(metadata.failed_ticker_count / planned_ticker_count, 4),
+            "latest_bar_date_mismatch_ratio": round(metadata.latest_bar_date_mismatch_count / planned_ticker_count, 4),
+            "insufficient_history_ratio": round(metadata.insufficient_history_count / planned_ticker_count, 4),
         },
         "data_coverage": {
             "planned_tickers": metadata.planned_ticker_count,
             "successful_tickers": metadata.successful_ticker_count,
             "bars_nonempty": metadata.bars_nonempty_count,
+            "bars_nonempty_ratio": round(metadata.bars_nonempty_count / planned_ticker_count, 4),
         },
+        "provider_issue_summary": provider_issues,
+        "data_failure_sample": list(metadata.data_failures[:10]),
+        "attention_required": metadata.quality_gate in {"warn", "block"} or metadata.run_status != "success",
         "reliability_label": metadata.reliability_label,
     }
 

@@ -29,13 +29,20 @@ uv run python -m screener.cli.main run --date 2026-04-21 --use-staged-intraday
 uv run python -m screener.cli.main run --date 2026-04-21 --persist-oracle-sql
 uv run python -m screener.cli.main run --date 2026-05-01 --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 uv run python -m screener.cli.main run --date 2026-05-01 --universe-name personal-watchlist --universe-tickers TSLA,NVDA
+uv run python -m screener.cli.main run --date 2026-05-01 --overlay-tickers SMCI,ARM --overlay-name ai-infra
 uv run python scripts/run_daily.py --skip-install --persist-oracle-sql
 uv run python scripts/run_daily.py --date ny-today --skip-install --persist-oracle-sql
 uv run python scripts/run_daily.py --date 2026-04-21 --skip-install
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --universe-name user-watchlist --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
+uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --overlay-file config/hot-sector-overlay.txt --overlay-name hot-sector
+uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --tickers TSLA,NVDA --assistant-artifact-basename latest-user-watchlist-screener
 ```
 
 `--tickers`/`--universe-tickers`는 comma-separated ticker를 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 이 옵션을 주지 않으면 기존 기본 universe와 output schema는 그대로 NASDAQ-100입니다. `--universe-name`은 custom ticker list와 함께만 허용됩니다. `scripts/run_daily.py`에서 custom tickers를 쓰고 `--output-root`를 생략하면 NASDAQ-100 cron의 `output/daily/latest`를 건드리지 않도록 기본 root가 `output/daily-user-watchlist`로 분리되고, 성공 시 `output/assistant/latest-user-briefing-screener.{json,md}`도 자동 갱신됩니다.
+
+`--overlay-tickers` 또는 `--overlay-file`은 기본 NASDAQ-100/custom universe에 hot-sector overlay ticker를 추가합니다. overlay file은 JSON/CSV/newline-separated text를 지원하고, `--overlay-name`은 output root suffix와 artifact metadata label에 쓰입니다. `scripts/run_daily.py`에서 custom ticker 또는 overlay를 쓰고 `--output-root`를 생략하면 `output/daily-<universe-or-overlay>` 계열 root로 분리됩니다.
+
+`scripts/run_daily.py`는 성공한 non-dry-run 뒤 compact assistant briefing을 기본 생성합니다. `--skip-assistant-briefing`으로 끌 수 있고, `--assistant-user-tickers`, `--assistant-output-dir`, `--assistant-artifact-basename`으로 대상 ticker와 artifact 위치/이름을 바꿀 수 있습니다.
 
 ### Assistant briefing
 ```bash
@@ -44,7 +51,7 @@ uv run python -m screener.cli.main build-assistant-briefing --user-tickers TSLA,
 uv run python -m screener.cli.main build-assistant-briefing --report-path output/daily/latest/daily-report.json --artifact-basename latest-user-watchlist-screener
 ```
 
-Reads `output/daily/latest/daily-report.json` by default and writes compact assistant artifacts under `output/assistant/`. The default artifact names remain `latest-user-briefing-screener.{json,md}`; `--artifact-basename latest-user-watchlist-screener` writes a separate `latest-user-watchlist-screener.{json,md}` pair. Signals are decision-support only and not buy/sell advice.
+Reads `output/daily/latest/daily-report.json` by default and writes compact assistant artifacts under `output/assistant/`. The default artifact names remain `latest-user-briefing-screener.{json,md}`; `--artifact-basename latest-user-watchlist-screener` writes a separate `latest-user-watchlist-screener.{json,md}` pair. Candidate briefing items include normalized `source_provenance`, sector/QQQ `relative_strength_context` with `sector_proxy`/`setup_context`, `risk_flags`, `why_not_buy_review_qualified`, and `what_would_need_to_improve`; see `docs/operations.md` for field semantics and fallback behavior. Signals are decision-support only and the briefing labels them as 관심/검토/보류, not buy/sell advice.
 
 ### Intraday
 ```bash
@@ -86,6 +93,12 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/2026-04-21/tuning-p
 - `output/intraday/YYYY-MM-DD/window-XX-of-YY/run-.../`: staged intraday metadata, quote artifact, provisional `alert-events.json` (`run_intraday_window.py` 기본값은 full-universe 수집이므로 보통 `window-01-of-01`)
 - `output/intraday/YYYY-MM-DD/latest-alert-events.json`: 같은 거래일의 최신 provisional intraday consumer entrypoint
 
+### Daily JSON artifact schema smoke contract
+- `output/daily/YYYY-MM-DD/daily-report.json`는 top-level `schema_version: 1`을 포함합니다.
+- deterministic smoke sample은 `tests/test_json_report_schema.py`가 고정 입력 `ScreenRunResult`로 검증합니다.
+- top-level 필드는 schema version, run metadata/counts, data quality fields, previous candidate outcomes, candidates 순서로 유지합니다.
+- candidate 항목은 `CandidateResult.model_dump(mode="json")` 형식을 따르며 `snapshot_schema_version`은 indicator snapshot contract와 별도로 유지합니다.
+
 artifact 필드와 운영 해석 기준은 `docs/architecture.md` 와 `docs/operations.md` 를 기준 문서로 봅니다.
 
 ## Project Layout
@@ -124,3 +137,21 @@ docs/                current-state documentation
 - 기본 wrapper command는 Twelve Data free plan 대비 버퍼를 더 두기 위해 `max_credits_per_minute=5` 를 사용합니다.
 - Twelve Data가 일일 크레딧 소진 응답을 주면 해당 slot의 추가 ticker 호출을 즉시 중단하고, 남은 planned ticker는 `skipped_due_to_credit_exhaustion` 으로 metadata에 기록합니다.
 - OpenClaw나 외부 오케스트레이터의 기본 daily consumer entrypoint는 `output/daily/latest/alert-events.json` 입니다.
+
+## Environment Variables
+- `SCREENER_MARKET_DATA_PROVIDER`: market data provider chain override. 기본값은 `finnhub,twelve-data,fmp,yfinance` 입니다.
+- `TWELVE_DATA_API_KEY`: Twelve Data API key.
+- `TWELVE_DATA_BASE_URL`: Twelve Data endpoint override. API key가 query string으로 붙으므로 public routable `http(s)` endpoint만 허용됩니다.
+- `FINNHUB_API_KEY` 또는 `SCREENER_FINNHUB_API_KEY`: Finnhub API key.
+- `FMP_API_KEY`, `FINANCIAL_MODELING_PREP_API_KEY`, 또는 `SCREENER_FMP_API_KEY`: Financial Modeling Prep API key.
+- `SCREENER_EARNINGS_CALENDAR_PATH`: earnings calendar JSON path.
+- `SCREENER_DAILY_INTRADAY_SOURCE_MODE=prefer-staged`: daily run에서 same-day staged quote 병합 활성화.
+- `SCREENER_INTRADAY_WINDOW_IDS`: intraday window 목록 override.
+- `SCREENER_INTRADAY_OUTPUT_ROOT`: intraday artifact root override.
+- `SCREENER_INTRADAY_COLLECTOR_COMMAND`: intraday runner command template override.
+- `SCREENER_ORACLE_SQL_ENABLED=1`: Oracle SQL persistence 기본 활성화.
+- `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING`: Oracle SQL credential.
+- `SCREENER_ORACLE_SQL_USER`, `SCREENER_ORACLE_SQL_PASSWORD`, `SCREENER_ORACLE_SQL_CONNECT_STRING`: 레거시 Oracle SQL credential alias. 같은 값이 둘 다 있으면 `ORACLE_DB_*` 가 우선합니다.
+- `SCREENER_OPENCLAW_SECRETS_PATH` 또는 `OPENCLAW_SECRETS_PATH`: OpenClaw secrets file path override. 환경변수가 없으면 기본적으로 `~/.openclaw/secrets.json` 에서 provider / Oracle credential을 읽습니다.
+
+비밀값 자체는 문서나 저장소에 기록하지 말고 변수명과 예시 placeholder만 사용합니다.

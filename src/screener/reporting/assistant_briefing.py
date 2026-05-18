@@ -5,15 +5,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from screener.data.resilience import derive_market_data_reliability_label
+from screener.overlay.hot_sector import SECTOR_PROXY_TICKERS
 from screener.storage.files import write_json, write_text
 from screener.universe import normalize_ticker
-from screener.data.resilience import derive_market_data_reliability_label
 
 JSON_ARTIFACT_NAME = "latest-user-briefing-screener.json"
 MARKDOWN_ARTIFACT_NAME = "latest-user-briefing-screener.md"
 
-_NO_SIGNAL_INTERPRETATION = "No technical turnaround candidate signal from the screener today."
-_CANDIDATE_INTERPRETATION = "Technical turnaround candidate signal from the screener today."
+_REVIEW_STAGE_LABELS = {
+    "buy-review": "검토",
+    "watchlist": "관심",
+    "avoid/high-risk": "보류",
+}
 
 
 def parse_user_tickers(raw: str) -> list[str]:
@@ -22,6 +26,35 @@ def parse_user_tickers(raw: str) -> list[str]:
 
 def load_daily_report(report_path: Path) -> dict[str, Any]:
     return json.loads(report_path.read_text(encoding="utf-8"))
+
+
+def _build_source_contract(
+    daily_report: dict[str, Any],
+    data_quality: dict[str, Any],
+    source_report_path: Path | None,
+) -> dict[str, Any]:
+    provider_statuses = list(data_quality.get("market_data_provider_status", []))
+    if any(status.get("used_stale_cache") for status in provider_statuses):
+        freshness = "stale"
+    elif any(
+        int(data_quality.get(key) or 0) > 0
+        for key in ("failed_ticker_count", "latest_bar_date_mismatch_count", "insufficient_history_count")
+    ):
+        freshness = "partial"
+    elif int(data_quality.get("successful_ticker_count") or 0) < int(data_quality.get("planned_ticker_count") or 0):
+        freshness = "partial"
+    else:
+        freshness = "fresh"
+
+    reliability_label = data_quality.get("reliability_label") or daily_report.get("reliability_label") or "unofficial"
+    source = str(daily_report.get("source") or "nasdaq-turnaround-screener")
+    return {
+        "source": source,
+        "source_report_path": str(source_report_path) if source_report_path is not None else None,
+        "freshness": freshness,
+        "reliability_label": reliability_label,
+        "market_data_reliability": data_quality.get("market_data_reliability") or reliability_label,
+    }
 
 
 def build_assistant_briefing_payload(
@@ -38,13 +71,17 @@ def build_assistant_briefing_payload(
     rank_by_ticker = {str(row.get("ticker", "")).upper(): index + 1 for index, row in enumerate(candidate_rows)}
     planned_tickers = {str(ticker).upper() for ticker in daily_report.get("planned_tickers", [])}
     data_failures_by_ticker = _parse_data_failures(daily_report.get("data_failures", []))
+    source_contract = _build_source_contract(daily_report, data_quality, source_report_path)
 
     payload: dict[str, Any] = {
-        "schema_version": 1,
-        "source": "nasdaq-turnaround-screener",
+        "schema_version": 2,
+        "source": source_contract["source"],
         "generated_at": generated_at.isoformat(),
         "screener_date": daily_report.get("date"),
         "source_report_path": str(source_report_path) if source_report_path is not None else None,
+        "source_contract": source_contract,
+        "source_freshness": source_contract["freshness"],
+        "source_reliability": source_contract["reliability_label"],
         "universe": daily_report.get("universe"),
         "data_quality": data_quality,
         "user_tickers": [],
@@ -53,6 +90,7 @@ def build_assistant_briefing_payload(
         "overlay_candidates": [],
         "notes": [
             "Signals are technical/research signals only and not buy/sell advice.",
+            "Treat 관심/검토/보류 as review stages only; valuation, business quality, and catalysts still need separate confirmation before any buy decision.",
         ],
     }
 
@@ -63,13 +101,18 @@ def build_assistant_briefing_payload(
             candidate_by_ticker,
             rank_by_ticker,
             data_failures_by_ticker,
+            daily_report,
         )
         payload["user_tickers"].append(item)
         if not item.get("in_screener_universe"):
             payload["missing_user_tickers"].append({"ticker": ticker, "reason": _missing_reason(ticker)})
 
     for row in candidate_rows[: max(0, top_candidate_count)]:
-        candidate = _compact_candidate(row, rank=rank_by_ticker.get(str(row.get("ticker", "")).upper(), 0))
+        candidate = _compact_candidate(
+            row,
+            rank=rank_by_ticker.get(str(row.get("ticker", "")).upper(), 0),
+            daily_report=daily_report,
+        )
         payload["top_candidates"].append(candidate)
 
     user_universe = {item.get("ticker") for item in payload["user_tickers"]}
@@ -80,73 +123,139 @@ def build_assistant_briefing_payload(
     return payload
 
 
-def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
+def _build_watchlist_section_lines(payload: dict[str, Any]) -> list[str]:
     lines = [
-        f"# NASDAQ Screener Assistant Briefing ({payload.get('screener_date')})",
+        "## Watchlist / Holdings",
+        "These are the user’s tracked tickers and are shown separately from discovery candidates.",
         "",
-        "These signals are decision-support only and not buy/sell advice.",
-        "",
-        "## Data quality",
+        "### Watchlist technical signal summary",
     ]
-    raw_data_quality = payload.get("data_quality", {})
-    data_quality = dict(raw_data_quality) if isinstance(raw_data_quality, dict) else {}
-    provider_statuses = list(data_quality.pop("market_data_provider_status", []))
-    for key, value in data_quality.items():
-        lines.append(f"- **{_pretty_key(key)}**: {value}")
-    if provider_statuses:
-        lines.append("")
-        lines.append("### Market data sources")
-        lines.extend(f"- {_format_provider_status(status)}" for status in provider_statuses)
-        reliability = payload.get("data_quality", {}).get("reliability_label") or payload.get("data_quality", {}).get("market_data_reliability")
-        if reliability:
-            lines.append(f"- **Reliability label**: {reliability}")
-
-    lines.extend(["", "## User holdings/watchlist technical signal summary"])
     for item in payload.get("user_tickers", []):
+        stage = item.get("review_stage") or _format_assistant_stage(item)
         if item.get("is_candidate"):
-            lines.append(
-                f"- **{item['ticker']}**: candidate rank {item.get('rank')} | score {item.get('score')} | "
-                f"risk-adjusted {item.get('risk_adjusted_score')} | tier {item.get('tier')}"
+            summary = (
+                f"- **{item['ticker']}**: {stage} | rank {item.get('rank')} | score {item.get('score')} | "
+                f"risk-adjusted {item.get('risk_adjusted_score')}"
             )
+            provenance = _format_source_provenance(item.get("source_provenance"))
+            if provenance:
+                summary += f" | {provenance}"
+            sector_context = _format_sector_relative_context(item)
+            if sector_context:
+                summary += f" | {sector_context}"
+            lines.append(summary)
+            if item.get("review_stage_reason"):
+                lines.append(f"  - {item['review_stage_reason']}")
+            lines.extend(_format_candidate_explanation_lines(item, indent="  - "))
         else:
-            summary = f"- **{item['ticker']}**: not a candidate"
+            summary = f"- **{item['ticker']}**: {stage}"
             if item.get("data_failure"):
                 summary += f" | data failure: {item.get('data_failure_reason')}"
+            elif item.get("review_stage_reason"):
+                summary += f" | {item.get('review_stage_reason')}"
             if not item.get("in_screener_universe"):
                 summary += " | outside screener universe"
             lines.append(summary)
+    return lines
 
-    lines.extend(["", "## Missing tickers / outside universe"])
-    missing_items = payload.get("missing_user_tickers", [])
-    if missing_items:
-        lines.extend(f"- {item['ticker']}: {item['reason']}" for item in missing_items)
-    else:
-        lines.append("- None")
 
-    universe_name = payload.get("universe") or "source screener universe"
-    lines.extend(["", f"## Top {universe_name} turnaround candidates"])
+def _build_discovery_section_lines(payload: dict[str, Any]) -> list[str]:
+    lines = [
+        "## New discovery candidates",
+        f"Top {payload.get('universe') or 'source screener universe'} review candidates from the screener output.",
+    ]
     top_candidates = payload.get("top_candidates", [])
     if top_candidates:
         for candidate in top_candidates:
             heading = candidate["ticker"]
             if candidate.get("name"):
                 heading += f" ({candidate['name']})"
-            lines.append(
-                f"- **#{candidate['rank']} {heading}**: score {candidate.get('score')} | "
-                f"risk-adjusted {candidate.get('risk_adjusted_score')} | tier {candidate.get('tier')}"
+            summary = (
+                f"- **#{candidate['rank']} {heading}**: {candidate.get('review_stage') or _review_stage_label(candidate.get('tier'))} | "
+                f"score {candidate.get('score')} | risk-adjusted {candidate.get('risk_adjusted_score')}"
             )
+            provenance = _format_source_provenance(candidate.get("source_provenance"))
+            if provenance:
+                summary += f" | {provenance}"
+            sector_context = _format_sector_relative_context(candidate)
+            if sector_context:
+                summary += f" | {sector_context}"
+            lines.append(summary)
+            lines.extend(_format_candidate_explanation_lines(candidate, indent="  - "))
     else:
         lines.append("- None")
+    return lines
 
-    lines.extend(["", "## Overlay candidates (outside user universe)"])
+
+def _build_overlay_section_lines(payload: dict[str, Any]) -> list[str]:
+    lines = ["## Overlay candidates (outside user universe)"]
     overlay_candidates = payload.get("overlay_candidates", [])
     if overlay_candidates:
         lines.extend(f"- {candidate.get('ticker')}: rank {candidate.get('rank')}" for candidate in overlay_candidates)
     else:
         lines.append("- None")
+    return lines
 
-    lines.extend(["", "## Notes"])
+
+def _build_consumer_messaging_section_lines(payload: dict[str, Any]) -> list[str]:
+    lines = ["## Notes"]
     lines.extend(f"- {note}" for note in payload.get("notes", []))
+    return lines
+
+
+def _build_missing_tickers_section_lines(payload: dict[str, Any]) -> list[str]:
+    lines = ["## Missing tickers / outside universe"]
+    missing_items = payload.get("missing_user_tickers", [])
+    if missing_items:
+        lines.extend(f"- {item['ticker']}: {item['reason']}" for item in missing_items)
+    else:
+        lines.append("- None")
+    return lines
+
+
+def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
+    lines = [
+        f"# NASDAQ Screener Assistant Briefing ({payload.get('screener_date')})",
+        "",
+        "These signals are decision-support only and not buy/sell advice.",
+        "",
+        "## Source / freshness / reliability",
+    ]
+    source_contract = payload.get("source_contract", {})
+    if isinstance(source_contract, dict):
+        source_items = [
+            ("Source", source_contract.get("source") or payload.get("source") or "nasdaq-turnaround-screener"),
+            ("Freshness", source_contract.get("freshness") or payload.get("source_freshness") or "unknown"),
+            ("Reliability label", source_contract.get("reliability_label") or payload.get("source_reliability") or "unknown"),
+        ]
+        if source_contract.get("source_report_path"):
+            source_items.append(("Source report path", source_contract.get("source_report_path")))
+        lines.extend(f"- **{label}**: {value}" for label, value in source_items)
+        if source_contract.get("market_data_reliability"):
+            lines.append(f"- **Market data reliability**: {source_contract['market_data_reliability']}")
+
+    lines.append("")
+    lines.append("## Data quality")
+    raw_data_quality = payload.get("data_quality", {})
+    data_quality = dict(raw_data_quality) if isinstance(raw_data_quality, dict) else {}
+    provider_statuses = list(data_quality.pop("market_data_provider_status", []))
+    for key, value in data_quality.items():
+        if key in {"reliability_label", "market_data_reliability"}:
+            continue
+        lines.append(f"- **{_pretty_key(key)}**: {value}")
+    if provider_statuses:
+        lines.append("")
+        lines.append("### Market data sources")
+        lines.extend(f"- {_format_provider_status(status)}" for status in provider_statuses)
+        reliability = payload.get("source_contract", {}).get("reliability_label") or payload.get("data_quality", {}).get("reliability_label") or payload.get("data_quality", {}).get("market_data_reliability")
+        if reliability:
+            lines.append(f"- **Reliability label**: {reliability}")
+
+    lines.extend([""] + _build_watchlist_section_lines(payload))
+    lines.extend([""] + _build_missing_tickers_section_lines(payload))
+    lines.extend([""] + _build_discovery_section_lines(payload))
+    lines.extend([""] + _build_overlay_section_lines(payload))
+    lines.extend([""] + _build_consumer_messaging_section_lines(payload))
     return "\n".join(lines) + "\n"
 
 
@@ -251,6 +360,121 @@ def _sanitize_provider_statuses(value: Any) -> list[dict[str, Any]]:
     return sanitized
 
 
+def _review_stage_label(tier: str | None) -> str:
+    return _REVIEW_STAGE_LABELS.get(str(tier or ""), "보류")
+
+
+def _review_stage_reason(
+    *,
+    tier: str | None,
+    in_screener_universe: bool,
+    data_failure: bool,
+) -> str:
+    if data_failure:
+        return "데이터 실패로 추가 검토가 필요합니다"
+    if not in_screener_universe:
+        return "소스 스크리너 유니버스 밖입니다"
+    if tier == "buy-review":
+        return "기술 신호는 충족했지만 밸류에이션·품질·촉매는 별도 확인이 필요합니다"
+    if tier == "watchlist":
+        return "기술 신호는 있으나 아직 검토 전 단계입니다"
+    if tier == "avoid/high-risk":
+        return "리스크가 높아 우선순위가 낮습니다"
+    return "추가 확인이 필요합니다"
+
+
+def _candidate_explanation_fields(candidate: dict[str, Any]) -> dict[str, Any]:
+    tier = str(candidate.get("tier") or "")
+    tier_reasons = _normalize_text_items(candidate.get("tier_reasons"))
+    risk_flags = _normalize_text_items(candidate.get("risk_flags")) or _normalize_text_items(candidate.get("risks"))
+    blocking_items = _dedupe_text_items([*tier_reasons, *risk_flags])
+
+    base_reason = _review_stage_reason(tier=tier, in_screener_universe=True, data_failure=False)
+    if tier == "buy-review":
+        why_not_buy_review = "이미 buy-review 조건은 충족했습니다; 그래도 밸류에이션·사업 품질·촉매는 별도 확인이 필요합니다."
+    elif tier_reasons:
+        why_not_buy_review = f"{base_reason}: {'; '.join(tier_reasons)}"
+    else:
+        why_not_buy_review = base_reason
+
+    if blocking_items:
+        improve_note = f"해소 필요: {'; '.join(blocking_items)}"
+    elif tier == "buy-review":
+        improve_note = "유지 필요: 기술 신호와 리스크 상태를 재확인하고 밸류에이션·품질·촉매를 별도 검증"
+    else:
+        improve_note = "개선 필요: risk-adjusted 점수, 기술적 확인, 리스크 프로필"
+
+    return {
+        "risk_flags": risk_flags,
+        "why_not_buy_review_qualified": why_not_buy_review,
+        "what_would_need_to_improve": improve_note,
+    }
+
+
+def _normalize_text_items(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return _dedupe_text_items(str(item).strip() for item in value if str(item).strip())
+
+
+def _dedupe_text_items(items: Any) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item).strip()
+        key = " ".join(text.casefold().split())
+        if not text or key in seen:
+            continue
+        normalized.append(text)
+        seen.add(key)
+    return normalized
+
+
+def _review_stage_interpretation(
+    *,
+    tier: str | None,
+    in_screener_universe: bool,
+    data_failure: bool,
+) -> str:
+    stage = _review_stage_label(tier)
+    return f"{stage}: {_review_stage_reason(tier=tier, in_screener_universe=in_screener_universe, data_failure=data_failure)}"
+
+
+def _format_assistant_stage(item: dict[str, Any]) -> str:
+    return _review_stage_label(item.get("tier") if item.get("is_candidate") else None)
+
+
+def _format_assistant_stage_reason(item: dict[str, Any]) -> str:
+    return _review_stage_reason(
+        tier=item.get("tier") if item.get("is_candidate") else None,
+        in_screener_universe=bool(item.get("in_screener_universe")),
+        data_failure=bool(item.get("data_failure")),
+    )
+
+
+def _format_assistant_interpretation(item: dict[str, Any]) -> str:
+    return _review_stage_interpretation(
+        tier=item.get("tier") if item.get("is_candidate") else None,
+        in_screener_universe=bool(item.get("in_screener_universe")),
+        data_failure=bool(item.get("data_failure")),
+    )
+
+
+def _format_candidate_explanation_lines(candidate: dict[str, Any], *, indent: str) -> list[str]:
+    lines: list[str] = []
+    risk_flags = _normalize_text_items(candidate.get("risk_flags")) or _normalize_text_items(candidate.get("risks"))
+    tier_reasons = _normalize_text_items(candidate.get("tier_reasons"))
+    if risk_flags:
+        lines.append(f"{indent}Risk flags: {'; '.join(risk_flags)}")
+    if tier_reasons:
+        lines.append(f"{indent}Tier reasons: {'; '.join(tier_reasons)}")
+    if candidate.get("why_not_buy_review_qualified"):
+        lines.append(f"{indent}Why not buy-review qualified: {candidate['why_not_buy_review_qualified']}")
+    if candidate.get("what_would_need_to_improve"):
+        lines.append(f"{indent}What would need to improve: {candidate['what_would_need_to_improve']}")
+    return lines
+
+
 def _format_provider_status(status: Any) -> str:
     if not isinstance(status, dict):
         return "unknown source: unknown"
@@ -292,6 +516,7 @@ def _build_user_ticker_item(
     candidate_by_ticker: dict[str, dict[str, Any]],
     rank_by_ticker: dict[str, int],
     data_failures_by_ticker: dict[str, str],
+    daily_report: dict[str, Any],
 ) -> dict[str, Any]:
     candidate = candidate_by_ticker.get(ticker)
     data_failure_reason = data_failures_by_ticker.get(ticker)
@@ -309,23 +534,53 @@ def _build_user_ticker_item(
             "tier_reasons": [],
             "reasons": [],
             "risks": [],
+            "review_stage": _review_stage_label(None),
+            "review_stage_reason": _review_stage_reason(
+                tier=None,
+                in_screener_universe=ticker in planned_tickers,
+                data_failure=data_failure,
+            ),
             "data_failure": data_failure,
             "data_failure_reason": data_failure_reason,
-            "assistant_interpretation": _NO_SIGNAL_INTERPRETATION,
+            "assistant_interpretation": _format_assistant_interpretation({
+                "tier": None,
+                "is_candidate": False,
+                "in_screener_universe": ticker in planned_tickers,
+                "data_failure": data_failure,
+            }),
         }
 
+    review_stage = _review_stage_label(str(candidate.get("tier") or None))
     return {
-        **_compact_candidate(candidate, rank=rank_by_ticker[ticker]),
+        **_compact_candidate(candidate, rank=rank_by_ticker[ticker], daily_report=daily_report),
         "in_screener_universe": ticker in planned_tickers,
         "is_candidate": True,
+        "review_stage": review_stage,
+        "review_stage_reason": _review_stage_reason(
+            tier=str(candidate.get("tier") or None),
+            in_screener_universe=ticker in planned_tickers,
+            data_failure=data_failure,
+        ),
         "data_failure": data_failure,
         "data_failure_reason": data_failure_reason,
-        "assistant_interpretation": _CANDIDATE_INTERPRETATION,
+        "assistant_interpretation": _format_assistant_interpretation(
+            {
+                "tier": candidate.get("tier"),
+                "is_candidate": True,
+                "in_screener_universe": ticker in planned_tickers,
+                "data_failure": data_failure,
+            }
+        ),
     }
 
 
-def _compact_candidate(candidate: dict[str, Any], *, rank: int) -> dict[str, Any]:
-    return {
+def _compact_candidate(
+    candidate: dict[str, Any],
+    *,
+    rank: int,
+    daily_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    compact: dict[str, Any] = {
         "rank": rank,
         "ticker": str(candidate.get("ticker", "")).upper(),
         "name": candidate.get("name"),
@@ -335,7 +590,225 @@ def _compact_candidate(candidate: dict[str, Any], *, rank: int) -> dict[str, Any
         "tier_reasons": list(candidate.get("tier_reasons") or []),
         "reasons": list(candidate.get("reasons") or []),
         "risks": list(candidate.get("risks") or []),
+        **_candidate_explanation_fields(candidate),
+        "source_provenance": _candidate_source_provenance(candidate, daily_report=daily_report),
     }
+
+    sector = _clean_optional_text(candidate.get("sector"))
+    industry = _clean_optional_text(candidate.get("industry"))
+    if sector:
+        compact["sector"] = sector
+    if industry:
+        compact["industry"] = industry
+
+    relative_context = _build_relative_strength_context(candidate)
+    if relative_context:
+        compact["relative_strength_context"] = relative_context
+        sector_proxy = _sector_proxy(candidate, sector)
+        if sector_proxy:
+            compact["sector_proxy"] = sector_proxy
+        compact["setup_context"] = _classify_setup_context(relative_context)
+
+    return compact
+
+
+def _candidate_source_provenance(
+    candidate: dict[str, Any],
+    *,
+    daily_report: dict[str, Any] | None,
+) -> dict[str, Any]:
+    raw = candidate.get("source_provenance") or candidate.get("provenance")
+    if isinstance(raw, dict):
+        source_type = _normalize_source_type(raw.get("source_type") or raw.get("type"))
+        source_timestamp = _first_present(
+            raw,
+            "source_timestamp",
+            "latest_source_timestamp",
+            "latest_source_date",
+            "filing_date",
+            "published_at",
+        )
+        if source_timestamp is None and source_type in {"market data", "fallback"}:
+            source_timestamp = (daily_report or {}).get("generated_at") or (daily_report or {}).get("date")
+        return {
+            "source_type": source_type,
+            "source_name": raw.get("source_name") or raw.get("name") or raw.get("form") or source_type,
+            "source_timestamp": str(source_timestamp) if source_timestamp is not None else None,
+            "freshness_label": str(raw.get("freshness_label") or _freshness_label_for_source(source_type)),
+        }
+
+    source_type = _normalize_source_type(
+        candidate.get("source_type") or candidate.get("evidence_source_type") or candidate.get("filing_source_type")
+    )
+    source_timestamp = _first_present(
+        candidate,
+        "source_timestamp",
+        "latest_source_timestamp",
+        "latest_source_date",
+        "filing_date",
+        "published_at",
+    )
+    if source_type != "fallback" or source_timestamp is not None:
+        if source_timestamp is None and source_type == "market data":
+            source_timestamp = (daily_report or {}).get("generated_at") or (daily_report or {}).get("date")
+        return {
+            "source_type": source_type,
+            "source_name": candidate.get("source_name") or candidate.get("filing_form") or source_type,
+            "source_timestamp": str(source_timestamp) if source_timestamp is not None else None,
+            "freshness_label": _freshness_label_for_source(source_type),
+        }
+
+    return _market_data_source_provenance(daily_report)
+
+
+def _market_data_source_provenance(daily_report: dict[str, Any] | None) -> dict[str, Any]:
+    report = daily_report or {}
+    provider_statuses = _sanitize_provider_statuses(report.get("market_data_provider_status", []))
+    providers = [str(status.get("provider")) for status in provider_statuses if status.get("provider")]
+    used_fallback = any(status.get("role") == "fallback" or status.get("fallback_provider") for status in provider_statuses)
+    source_type = "fallback" if used_fallback else "market data"
+    freshness = (
+        str(report.get("reliability_label") or derive_market_data_reliability_label(provider_statuses))
+        if provider_statuses
+        else "market data"
+    )
+    return {
+        "source_type": source_type,
+        "source_name": ", ".join(providers) if providers else "daily market data",
+        "source_timestamp": report.get("generated_at") or report.get("date"),
+        "freshness_label": freshness,
+    }
+
+
+def _normalize_source_type(value: Any) -> str:
+    text = str(value or "fallback").strip().lower().replace("_", "-")
+    if text in {"sec", "sec filing", "filing", "10-k", "10-q", "8-k"}:
+        return "SEC filing"
+    if text in {"ir", "ir release", "investor relations", "press release", "earnings release"}:
+        return "IR release"
+    if text in {"market", "market-data", "market data", "price data", "prices"}:
+        return "market data"
+    if text in {"fallback", "secondary", "fallback data"}:
+        return "fallback"
+    return str(value).strip() if value else "fallback"
+
+
+def _freshness_label_for_source(source_type: str) -> str:
+    if source_type in {"SEC filing", "IR release"}:
+        return "official"
+    if source_type == "market data":
+        return "market data"
+    return "fallback"
+
+
+def _first_present(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = mapping.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _format_source_provenance(provenance: Any) -> str | None:
+    if not isinstance(provenance, dict):
+        return None
+    parts = [f"provenance {provenance.get('source_type') or 'unknown'}"]
+    if provenance.get("source_name"):
+        parts.append(str(provenance["source_name"]))
+    if provenance.get("source_timestamp"):
+        parts.append(f"latest={provenance['source_timestamp']}")
+    parts.append(f"freshness={provenance.get('freshness_label') or 'unknown'}")
+    return " | ".join(parts)
+
+
+def _build_relative_strength_context(candidate: dict[str, Any]) -> dict[str, float]:
+    snapshot = candidate.get("indicator_snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    keys = (
+        "stock_return_20d",
+        "qqq_return_20d",
+        "rel_strength_20d_vs_qqq",
+        "sector_return_20d",
+        "rel_strength_20d_vs_sector",
+    )
+    context: dict[str, float] = {}
+    for key in keys:
+        value = candidate.get(key, snapshot.get(key))
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            context[key] = round(float(value), 2)
+        except (TypeError, ValueError):
+            continue
+    return context
+
+
+def _sector_proxy(candidate: dict[str, Any], sector: str | None) -> str | None:
+    snapshot = candidate.get("indicator_snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    for key in ("sector_proxy", "sector_proxy_ticker", "sector_etf"):
+        value = _clean_optional_text(candidate.get(key) or snapshot.get(key))
+        if value:
+            return value.upper()
+    if not sector:
+        return None
+    return SECTOR_PROXY_TICKERS.get(sector.lower()) or SECTOR_PROXY_TICKERS.get(sector.lower().replace(" ", "_"))
+
+
+def _classify_setup_context(relative_context: dict[str, float]) -> str:
+    vs_qqq = relative_context.get("rel_strength_20d_vs_qqq")
+    vs_sector = relative_context.get("rel_strength_20d_vs_sector")
+    sector_return = relative_context.get("sector_return_20d")
+
+    if vs_sector is not None and vs_sector >= 0 and sector_return is not None and sector_return < 0:
+        return "idiosyncratic rebound inside weak sector"
+    if vs_sector is not None and vs_sector < 0 and sector_return is not None and sector_return < 0:
+        return "sector-wide mean reversion laggard"
+    if vs_qqq is not None and vs_qqq >= 0:
+        return "benchmark-relative rebound"
+    if sector_return is not None and sector_return < 0:
+        return "sector-wide mean reversion"
+    return "mixed relative-strength setup"
+
+
+def _format_sector_relative_context(candidate: dict[str, Any]) -> str | None:
+    parts: list[str] = []
+    sector = candidate.get("sector")
+    industry = candidate.get("industry")
+    if sector and industry:
+        parts.append(f"sector {sector} / industry {industry}")
+    elif sector:
+        parts.append(f"sector {sector}")
+    elif industry:
+        parts.append(f"industry {industry}")
+
+    relative_context = candidate.get("relative_strength_context")
+    if isinstance(relative_context, dict):
+        vs_qqq = relative_context.get("rel_strength_20d_vs_qqq")
+        if isinstance(vs_qqq, (int, float)) and not isinstance(vs_qqq, bool):
+            parts.append(f"20d vs QQQ {_format_pp(float(vs_qqq))}")
+        vs_sector = relative_context.get("rel_strength_20d_vs_sector")
+        if isinstance(vs_sector, (int, float)) and not isinstance(vs_sector, bool):
+            sector_proxy = candidate.get("sector_proxy") or "sector proxy"
+            parts.append(f"vs {sector_proxy} {_format_pp(float(vs_sector))}")
+
+    setup_context = candidate.get("setup_context")
+    if setup_context:
+        parts.append(f"setup: {setup_context}")
+    return " | ".join(parts) if parts else None
+
+
+def _format_pp(value: float) -> str:
+    return f"{value:+.1f}pp"
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _missing_reason(ticker: str) -> str:

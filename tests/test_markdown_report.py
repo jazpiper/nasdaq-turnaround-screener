@@ -60,5 +60,22 @@ def test_markdown_report_puts_previous_candidate_outcomes_near_top() -> None:
 
     report = build_markdown_report(result)
 
-    assert report.index("## Previous Candidate T+1 Outcomes") < report.index("## Buy Review Candidates")
+    assert report.index("## Previous Candidate T+1 Outcomes") < report.index("## Review Candidates")
     assert "- **AAPL (Apple Inc.)**: T+1 +3.25% (+3.25)" in report
+
+
+def test_markdown_report_includes_reliability_label_without_provider_status() -> None:
+    generated_at = datetime(2026, 5, 1, 20, 0, tzinfo=timezone.utc)
+    result = ScreenRunResult(
+        metadata=RunMetadata(
+            run_date=date(2026, 5, 1),
+            generated_at=generated_at,
+            artifact_directory=Path("output/daily/2026-05-01"),
+            reliability_label="stale",
+        ),
+    )
+
+    report = build_markdown_report(result)
+
+    assert "## Market Data Reliability" in report
+    assert "- **Reliability label**: stale" in report

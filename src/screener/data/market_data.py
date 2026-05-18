@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+from json import JSONDecodeError
 import os
 import time
 from dataclasses import dataclass, field
@@ -193,7 +194,10 @@ def _flatten_yfinance_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, 
 
 
 def _load_json_response(response_reader: HttpResponseReader, url: str) -> dict[str, Any]:
-    payload = json.loads(response_reader(url))
+    try:
+        payload = json.loads(response_reader(url))
+    except JSONDecodeError as exc:
+        raise MarketDataProviderError("provider response was not valid JSON") from exc
     if not isinstance(payload, dict):
         raise MarketDataProviderError("Provider response must be a JSON object")
     return payload
@@ -529,7 +533,10 @@ class TwelveDataDailyBarFetcher:
                 "apikey": self.api_key,
             }
         )
-        payload = json.loads(self.response_reader(f"{self.base_url}?{params}"))
+        try:
+            payload = json.loads(self.response_reader(f"{self.base_url}?{params}"))
+        except JSONDecodeError as exc:
+            raise MarketDataProviderError("provider response was not valid JSON") from exc
         if "status" in payload and payload["status"] == "error":
             message = sanitize_provider_message(payload.get("message", "Twelve Data request failed"))
             if classify_provider_error(message) == "rate_limited":

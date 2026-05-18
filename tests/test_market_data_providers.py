@@ -198,6 +198,21 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertIn("GOOD", result.bars_by_ticker)
         self.assertEqual(result.failed_tickers["BAD"], "bad symbol")
 
+    def test_twelve_data_fetcher_reports_invalid_json_as_operator_facing_provider_error(self):
+        fetcher = TwelveDataDailyBarFetcher(
+            api_key="secret",
+            response_reader=lambda url: "<html>upstream outage api_key=secret-value</html>",
+            resilience_state=ProviderResilienceState(),
+        )
+
+        result = fetcher.fetch(["AAPL"])
+
+        self.assertEqual(result.bars_by_ticker, {})
+        self.assertEqual(result.failed_tickers["AAPL"], "provider response was not valid JSON")
+        self.assertEqual(result.source_statuses[0]["message"], "provider response was not valid JSON")
+        self.assertEqual(result.source_statuses[0]["error_kind"], "provider_error")
+        self.assertNotIn("secret-value", json.dumps(result.source_statuses))
+
     def test_read_url_uses_default_timeout(self):
         observed: dict[str, object] = {}
 

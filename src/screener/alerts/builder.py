@@ -15,8 +15,121 @@ from screener.alerts.policy import (
 )
 from screener.alerts.schema import AlertDocument, AlertEvent, AlertSource, AlertSummary
 from screener.alerts.state import AlertState, DigestAlertState, TickerAlertState
-from screener.models import ScreenRunResult
+from screener.models import CandidateResult, ScreenRunResult
 from screener.scoring import WATCHLIST_TIER
+
+SECTOR_CONCENTRATION_CAP = 2
+CORRELATION_GROUP_CAP = 2
+REPEAT_DIGEST_SCORE_DELTA_CAP = 2
+REPEAT_DIGEST_RANK_DELTA_CAP = 1
+
+
+def _candidate_context_value(candidate, keys: tuple[str, ...]) -> str | None:
+    snapshot = candidate.indicator_snapshot or {}
+    for key in keys:
+        value = snapshot.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    return None
+
+
+def _member_context_value(member: dict[str, object], key: str) -> str | None:
+    value = member.get(key)
+    if value is not None and str(value).strip():
+        return str(value).strip().lower()
+    return None
+
+
+def _build_ticker_alert_state(
+    *,
+    candidate: CandidateResult,
+    rank: int,
+    tier: str,
+    signature: str,
+    generated_at,
+    dedupe_key: str,
+) -> TickerAlertState:
+    snapshot = candidate.indicator_snapshot or {}
+    return TickerAlertState(
+        last_delivery_tier=tier,
+        last_material_signature=signature,
+        last_phase="final",
+        last_emitted_at=generated_at,
+        last_dedupe_key=dedupe_key,
+        last_score=candidate.score,
+        last_risk_adjusted_score=candidate.risk_adjusted_score,
+        last_rank=rank,
+        last_headline_reason=headline_reason(candidate),
+        last_headline_risk=headline_risk(candidate),
+        last_earnings_penalty=int(snapshot.get("earnings_penalty", 0) or 0),
+        last_volatility_penalty=int(snapshot.get("volatility_penalty", 0) or 0),
+    )
+
+
+def _should_suppress_repeated_digest_alert(
+    previous: TickerAlertState | None,
+    *,
+    candidate: CandidateResult,
+    rank: int,
+    signature: str,
+) -> bool:
+    if previous is None or previous.last_delivery_tier != "digest":
+        return False
+    if previous.last_material_signature != signature:
+        return False
+
+    previous_score = int(previous.last_score if previous.last_score is not None else candidate.score)
+    previous_selection_score = int(
+        previous.last_risk_adjusted_score
+        if previous.last_risk_adjusted_score is not None
+        else previous_score
+    )
+    previous_rank = int(previous.last_rank if previous.last_rank is not None else rank)
+    score_delta = abs(candidate.score - previous_score)
+    selection_score_delta = abs(
+        (candidate.risk_adjusted_score if candidate.risk_adjusted_score is not None else candidate.score)
+        - previous_selection_score
+    )
+    rank_delta = abs(rank - previous_rank)
+    return (
+        score_delta <= REPEAT_DIGEST_SCORE_DELTA_CAP
+        and selection_score_delta <= REPEAT_DIGEST_SCORE_DELTA_CAP
+        and rank_delta <= REPEAT_DIGEST_RANK_DELTA_CAP
+    )
+
+
+def _apply_context_cap(
+    events: list[AlertEvent],
+    digest_members: list[dict[str, object]],
+    *,
+    key: str,
+    cap: int,
+) -> tuple[list[AlertEvent], list[dict[str, object]], set[str]]:
+    suppressed: set[str] = set()
+    counts: dict[str, int] = {}
+    items: list[dict[str, object]] = []
+    for event in events:
+        payload = event.payload
+        items.append(
+            {
+                "ticker": payload.get("ticker"),
+                "rank": payload.get("rank"),
+                key: payload.get(key),
+            }
+        )
+    items.extend(digest_members)
+
+    for item in sorted(items, key=lambda item: int(item.get("rank") or 10_000)):
+        group = _member_context_value(item, key)
+        if group is None:
+            continue
+        counts[group] = counts.get(group, 0) + 1
+        if counts[group] > cap and item.get("ticker") is not None:
+            suppressed.add(str(item["ticker"]))
+
+    filtered_events = [event for event in events if str(event.payload.get("ticker")) not in suppressed]
+    filtered_members = [member for member in digest_members if str(member["ticker"]) not in suppressed]
+    return filtered_events, filtered_members, suppressed
 
 
 def build_daily_alert_document(
@@ -48,21 +161,63 @@ def build_daily_alert_document(
             f"nasdaq-turnaround:{result.metadata.run_date.isoformat()}:{candidate.ticker}:{tier}:"
             f"{sha1(signature.encode('utf-8')).hexdigest()[:8]}"
         )
+        ticker_state = _build_ticker_alert_state(
+            candidate=candidate,
+            rank=rank,
+            tier=tier,
+            signature=signature,
+            generated_at=result.metadata.generated_at,
+            dedupe_key=dedupe_key,
+        )
+        repeated_digest_noise = _should_suppress_repeated_digest_alert(
+            previous,
+            candidate=candidate,
+            rank=rank,
+            signature=signature,
+        )
 
         if tier == "single":
-            events.append(
-                AlertEvent(
-                    event_type="ticker_alert",
-                    phase="final",
-                    delivery_mode="single",
-                    delivery_priority="high",
-                    severity="warning",
-                    dedupe_key=dedupe_key,
-                    group_key=f"nasdaq-turnaround:{result.metadata.run_date.isoformat()}:final",
-                    change_status=change_status,
-                    change_reason_codes=[change_status],
-                    message_summary=f"{candidate.ticker} final alert: score {candidate.score}, rank {rank}",
-                    payload={
+            if not repeated_digest_noise:
+                events.append(
+                    AlertEvent(
+                        event_type="ticker_alert",
+                        phase="final",
+                        delivery_mode="single",
+                        delivery_priority="high",
+                        severity="warning",
+                        dedupe_key=dedupe_key,
+                        group_key=f"nasdaq-turnaround:{result.metadata.run_date.isoformat()}:final",
+                        change_status=change_status,
+                        change_reason_codes=[change_status],
+                        message_summary=f"{candidate.ticker} final alert: score {candidate.score}, rank {rank}",
+                        payload={
+                            "ticker": candidate.ticker,
+                            "name": candidate.name,
+                            "score": candidate.score,
+                            "risk_adjusted_score": candidate.risk_adjusted_score,
+                            "tier": candidate.tier,
+                            "tier_reasons": list(candidate.tier_reasons),
+                            "rank": rank,
+                            "subscores": candidate.subscores.model_dump(mode="json"),
+                            "reasons": list(candidate.reasons),
+                            "risks": list(candidate.risks),
+                            "indicator_snapshot": candidate.indicator_snapshot or {},
+                            "headline_reason": headline_reason(candidate),
+                            "headline_risk": headline_risk(candidate),
+                            "market_data_reliability": result.metadata.reliability_label,
+                            "sector": _candidate_context_value(candidate, ("sector", "gics_sector")),
+                            "correlation_group": _candidate_context_value(
+                                candidate,
+                                ("correlation_group", "correlation_cluster", "candidate_correlation_group"),
+                            ),
+                            "source_candidate_ref": f"#/candidates/{rank - 1}",
+                        },
+                    )
+                )
+        elif tier == "digest":
+            if not repeated_digest_noise:
+                digest_members.append(
+                    {
                         "ticker": candidate.ticker,
                         "name": candidate.name,
                         "score": candidate.score,
@@ -70,47 +225,38 @@ def build_daily_alert_document(
                         "tier": candidate.tier,
                         "tier_reasons": list(candidate.tier_reasons),
                         "rank": rank,
-                        "subscores": candidate.subscores.model_dump(mode="json"),
-                        "reasons": list(candidate.reasons),
-                        "risks": list(candidate.risks),
-                        "indicator_snapshot": candidate.indicator_snapshot or {},
                         "headline_reason": headline_reason(candidate),
                         "headline_risk": headline_risk(candidate),
-                        "source_candidate_ref": f"#/candidates/{rank - 1}",
-                    },
+                        "market_data_reliability": result.metadata.reliability_label,
+                        "sector": _candidate_context_value(candidate, ("sector", "gics_sector")),
+                        "correlation_group": _candidate_context_value(
+                            candidate,
+                            ("correlation_group", "correlation_cluster", "candidate_correlation_group"),
+                        ),
+                        "change_status": change_status,
+                    }
                 )
-            )
-        elif tier == "digest":
-            digest_members.append(
-                {
-                    "ticker": candidate.ticker,
-                    "name": candidate.name,
-                    "score": candidate.score,
-                    "risk_adjusted_score": candidate.risk_adjusted_score,
-                    "tier": candidate.tier,
-                    "tier_reasons": list(candidate.tier_reasons),
-                    "rank": rank,
-                    "headline_reason": headline_reason(candidate),
-                    "headline_risk": headline_risk(candidate),
-                    "change_status": change_status,
-                }
-            )
 
-        if tier != "suppressed":
-            next_tickers[candidate.ticker] = TickerAlertState(
-                last_delivery_tier=tier,
-                last_material_signature=signature,
-                last_phase="final",
-                last_emitted_at=result.metadata.generated_at,
-                last_dedupe_key=dedupe_key,
-                last_score=candidate.score,
-                last_risk_adjusted_score=candidate.risk_adjusted_score,
-                last_rank=rank,
-                last_headline_reason=headline_reason(candidate),
-                last_headline_risk=headline_risk(candidate),
-                last_earnings_penalty=int((candidate.indicator_snapshot or {}).get("earnings_penalty", 0) or 0),
-                last_volatility_penalty=int((candidate.indicator_snapshot or {}).get("volatility_penalty", 0) or 0),
-            )
+        if tier != "suppressed" or repeated_digest_noise:
+            next_tickers[candidate.ticker] = previous if repeated_digest_noise and previous is not None else ticker_state
+
+    sector_capped_tickers: set[str] = set()
+    correlation_capped_tickers: set[str] = set()
+    sector_concentration_gate = "pass"
+    correlation_gate = "pass"
+    sector_concentration_cap = SECTOR_CONCENTRATION_CAP if regime.is_bearish else None
+    correlation_group_cap = CORRELATION_GROUP_CAP if regime.is_bearish else None
+    if regime.is_bearish:
+        events, digest_members, sector_capped_tickers = _apply_context_cap(
+            events, digest_members, key="sector", cap=SECTOR_CONCENTRATION_CAP
+        )
+        events, digest_members, correlation_capped_tickers = _apply_context_cap(
+            events, digest_members, key="correlation_group", cap=CORRELATION_GROUP_CAP
+        )
+        sector_concentration_gate = "capped" if sector_capped_tickers else "pass"
+        correlation_gate = "capped" if correlation_capped_tickers else "pass"
+        for ticker in sector_capped_tickers | correlation_capped_tickers:
+            next_tickers.pop(ticker, None)
 
     capped_watchlist_tickers: set[str] = set()
     if regime.watchlist_cap is not None:
@@ -181,6 +327,14 @@ def build_daily_alert_document(
             regime_gate=regime.status,
             regime_watchlist_cap=regime.watchlist_cap,
             regime_gate_reason=regime.reason,
+            sector_concentration_gate=sector_concentration_gate,
+            sector_concentration_cap=sector_concentration_cap,
+            suppressed_by_sector_concentration_count=len(sector_capped_tickers),
+            correlation_gate=correlation_gate,
+            correlation_group_cap=correlation_group_cap,
+            suppressed_by_correlation_count=len(correlation_capped_tickers),
+            market_data_reliability=result.metadata.reliability_label,
+            market_data_provider_status=[dict(status) for status in result.metadata.market_data_provider_status],
         ),
         events=emitted_events,
     )

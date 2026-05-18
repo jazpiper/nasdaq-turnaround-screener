@@ -604,6 +604,13 @@ def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
     assert "bars_nonempty_count_lt_80" in result.metadata.quality_gate_reasons
     assert "latest_bar_date_mismatch_count_gt_0" in result.metadata.quality_gate_reasons
     assert result.metadata.observability["quality_gate"] == "block"
+    assert result.metadata.observability["attention_required"] is True
+    failure_rates = result.metadata.observability["failure_rates"]
+    data_coverage = result.metadata.observability["data_coverage"]
+    assert isinstance(failure_rates, dict)
+    assert isinstance(data_coverage, dict)
+    assert failure_rates["latest_bar_date_mismatch_ratio"] == 1.0
+    assert data_coverage["bars_nonempty_ratio"] == 1.0
     assert artifacts.markdown_path is None
     assert not tmp_path.exists() or not any(tmp_path.iterdir())
 

@@ -21,6 +21,10 @@ if TYPE_CHECKING:
     from .walkforward import WalkForwardResult
 
 
+APPLY_PROPOSAL_COMMAND_TEMPLATE = "uv run python scripts/apply_tuning_proposal.py {proposal_path}"
+THRESHOLDS_PATH = "src/screener/scoring/thresholds.py"
+
+
 def write_grid_csv(path: Path, result: GridResult) -> Path:
     """Write all grid combinations and their objective scores to CSV."""
     buf = StringIO()
@@ -69,6 +73,7 @@ def write_proposal_json(
             "horizon": result.horizon,
             "generated_at": (generated_at or datetime.now(timezone.utc)).isoformat(),
             "current": _thresholds_dict(current),
+            "apply": _apply_payload(path),
         }
         return write_json(path, payload)
 
@@ -86,6 +91,7 @@ def write_proposal_json(
             "sample_count": best.sample_count,
         },
         "current_objective": None,  # populated by apply_tuning_proposal.py after review
+        "apply": _apply_payload(path),
     }
     return write_json(path, payload)
 
@@ -100,6 +106,7 @@ def write_diff_markdown(path: Path, result: GridResult) -> Path:
 
     if best is None:
         lines.append("**Status**: no proposal — no combination met the minimum sample threshold.\n")
+        _append_apply_command(lines, path)
         return write_text(path, "\n".join(lines))
 
     lines.append(f"**Status**: proposal\n")
@@ -117,6 +124,7 @@ def write_diff_markdown(path: Path, result: GridResult) -> Path:
     lines.append("- [ ] Reviewed `output/tuning/.../tuning-grid.csv` for runner-up combinations")
     lines.append("- [ ] Checked that sample counts are large enough to be statistically meaningful")
     lines.append("- [ ] Approved changes to `src/screener/scoring/thresholds.py`")
+    _append_apply_command(lines, path)
 
     return write_text(path, "\n".join(lines))
 
@@ -194,6 +202,7 @@ def write_proposal_json_from_walkforward(
             "generated_at": ts,
             "current": _thresholds_dict(current),
             "walk_forward_window_count": len(result.windows),
+            "apply": _apply_payload(path),
         }
         return write_json(path, payload)
 
@@ -217,6 +226,7 @@ def write_proposal_json_from_walkforward(
             "window_indices": best_stability.window_indices,
         },
         "current_objective": None,
+        "apply": _apply_payload(path),
     }
     return write_json(path, payload)
 
@@ -229,6 +239,7 @@ def write_diff_markdown_from_walkforward(path: Path, result: WalkForwardResult) 
 
     if result.proposal is None:
         lines.append(f"**Status**: no proposal — {_walkforward_no_proposal_reason(result)}.\n")
+        _append_apply_command(lines, path)
         return write_text(path, "\n".join(lines))
 
     best_stability = next(s for s in result.stability if s.thresholds == result.proposal)
@@ -262,8 +273,29 @@ def write_diff_markdown_from_walkforward(path: Path, result: WalkForwardResult) 
     lines.append("- [ ] Reviewed `tuning-walkforward.json` for per-window breakdown")
     lines.append("- [ ] Verified out-of-sample excess returns are positive")
     lines.append("- [ ] Approved changes to `src/screener/scoring/thresholds.py`")
+    _append_apply_command(lines, path)
 
     return write_text(path, "\n".join(lines))
+
+
+def _append_apply_command(lines: list[str], proposal_or_diff_path: Path) -> None:
+    proposal_path = proposal_or_diff_path.with_name("tuning-proposal.json")
+    lines.append("\n## Apply Command\n")
+    lines.append(f"Dry-run: `{_apply_command_for_path(proposal_path)}`")
+    lines.append(f"Write + test: `{_apply_command_for_path(proposal_path)} --write`")
+
+
+def _apply_payload(proposal_path: Path) -> dict:
+    command = _apply_command_for_path(proposal_path)
+    return {
+        "target": THRESHOLDS_PATH,
+        "dry_run_command": command,
+        "write_command": f"{command} --write",
+    }
+
+
+def _apply_command_for_path(proposal_path: Path) -> str:
+    return APPLY_PROPOSAL_COMMAND_TEMPLATE.format(proposal_path=proposal_path.as_posix())
 
 
 def _thresholds_dict(t: TierThresholds) -> dict:

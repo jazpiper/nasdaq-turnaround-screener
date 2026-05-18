@@ -5,12 +5,27 @@ from pathlib import Path
 
 from screener.alerts.builder import build_daily_alert_document
 from screener.alerts.policy import material_signature
-from screener.alerts.state import AlertState
+from screener.alerts.state import AlertState, TickerAlertState
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown, ScreenRunResult
 from screener.scoring import BUY_REVIEW_TIER
 
 
-def make_candidate(*, ticker: str = "AAPL", score: int = 64) -> CandidateResult:
+def make_candidate(
+    *,
+    ticker: str = "AAPL",
+    score: int = 64,
+    sector: str | None = None,
+    correlation_group: str | None = None,
+) -> CandidateResult:
+    indicator_snapshot = {
+        "earnings_penalty": 0,
+        "volatility_penalty": 0,
+        "volume_ratio_20d": 1.1,
+    }
+    if sector is not None:
+        indicator_snapshot["sector"] = sector
+    if correlation_group is not None:
+        indicator_snapshot["correlation_group"] = correlation_group
     return CandidateResult(
         ticker=ticker,
         name="Apple Inc.",
@@ -20,19 +35,22 @@ def make_candidate(*, ticker: str = "AAPL", score: int = 64) -> CandidateResult:
         tier_reasons=["score, reversal, volume, and risk profile qualify for buy review"],
         reasons=["BB 하단 근처 또는 재진입 구간", "5일선 회복 또는 회복 시도"],
         risks=["중기 추세는 아직 하락 압력일 수 있음"],
-        indicator_snapshot={
-            "earnings_penalty": 0,
-            "volatility_penalty": 0,
-            "volume_ratio_20d": 1.1,
-        },
+        indicator_snapshot=indicator_snapshot,
         generated_at=datetime(2026, 4, 22, 7, 30, tzinfo=timezone.utc),
     )
 
 
-def make_watchlist_candidate(*, ticker: str, score: int = 52) -> CandidateResult:
+def make_watchlist_candidate(
+    *, ticker: str, score: int = 52, sector: str | None = None, correlation_group: str | None = None
+) -> CandidateResult:
     from screener.scoring import WATCHLIST_TIER
 
-    return make_candidate(ticker=ticker, score=score).model_copy(
+    return make_candidate(
+        ticker=ticker,
+        score=score,
+        sector=sector,
+        correlation_group=correlation_group,
+    ).model_copy(
         update={"tier": WATCHLIST_TIER, "tier_reasons": ["score below buy-review threshold"]}
     )
 
@@ -122,7 +140,39 @@ def test_build_daily_alert_document_keeps_prior_state_when_quality_gate_blocks()
     assert next_state.tickers["AAPL"].last_dedupe_key == "old-key"
 
 
-def test_build_daily_alert_document_upgrades_digest_candidate_to_single() -> None:
+def test_build_daily_alert_document_suppresses_repeated_digest_noise() -> None:
+    candidate = make_candidate(score=64)
+    document, next_state = build_daily_alert_document(
+        make_result([candidate], bars_nonempty_count=95),
+        state=AlertState(
+            run_date="2026-04-22",
+            tickers={
+                "AAPL": TickerAlertState(
+                    last_delivery_tier="digest",
+                    last_material_signature=material_signature(candidate, rank=1),
+                    last_phase="final",
+                    last_emitted_at=datetime(2026, 4, 22, 15, 30, tzinfo=timezone.utc),
+                    last_dedupe_key="old-digest-key",
+                    last_score=64,
+                    last_risk_adjusted_score=64,
+                    last_rank=1,
+                    last_headline_reason="BB 하단 근처 또는 재진입 구간",
+                    last_headline_risk="중기 추세는 아직 하락 압력일 수 있음",
+                    last_earnings_penalty=0,
+                    last_volatility_penalty=0,
+                )
+            },
+        ),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+    )
+
+    assert document.events == []
+    assert document.summary.individual_event_count == 0
+    assert document.summary.digest_event_count == 0
+    assert next_state.tickers["AAPL"].last_delivery_tier == "digest"
+
     document, _ = build_daily_alert_document(
         make_result([make_candidate(score=68)], bars_nonempty_count=95),
         state=AlertState(
@@ -259,3 +309,103 @@ def test_build_daily_alert_does_not_cap_when_close_equals_ma() -> None:
     assert len(digest_events) == 1
     assert digest_events[0].payload["member_count"] == 6
     assert set(next_state.tickers) == {f"T{i:02d}" for i in range(6)}
+
+
+def test_build_daily_alert_document_propagates_market_data_reliability_context() -> None:
+    result = make_result([make_candidate()], bars_nonempty_count=95)
+    result.metadata.reliability_label = "stale"
+    result.metadata.market_data_provider_status = [
+        {
+            "provider": "twelve-data",
+            "role": "primary",
+            "status": "partial_success",
+            "attempted_ticker_count": 100,
+            "successful_ticker_count": 95,
+            "failed_ticker_count": 5,
+            "error_kind": "rate_limited",
+        }
+    ]
+
+    document, _ = build_daily_alert_document(
+        result,
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+    )
+
+    assert document.summary.market_data_reliability == "stale"
+    assert document.summary.market_data_provider_status == result.metadata.market_data_provider_status
+    assert document.events[0].payload["market_data_reliability"] == "stale"
+
+
+def test_build_daily_alert_limits_sector_concentration_in_bearish_regime() -> None:
+    candidates = [
+        make_watchlist_candidate(ticker="S0", sector="Technology"),
+        make_watchlist_candidate(ticker="S1", sector="Technology"),
+        make_watchlist_candidate(ticker="S2", sector="Technology"),
+        make_watchlist_candidate(ticker="H0", sector="Healthcare"),
+    ]
+
+    document, next_state = build_daily_alert_document(
+        make_result(candidates, bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context={"qqq_below_20d_ma": True, "qqq_return_20d": -7.0},
+    )
+
+    assert document.summary.sector_concentration_gate == "capped"
+    assert document.summary.sector_concentration_cap == 2
+    assert document.summary.suppressed_by_sector_concentration_count == 1
+    digest_event = [e for e in document.events if e.event_type == "digest_alert"][0]
+    assert [member["ticker"] for member in digest_event.payload["members"]] == ["S0", "S1", "H0"]
+    assert set(next_state.tickers) == {"S0", "S1", "H0"}
+
+
+def test_build_daily_alert_limits_correlated_candidates_in_bearish_regime() -> None:
+    candidates = [
+        make_watchlist_candidate(ticker="C0", correlation_group="mega-cap-ai"),
+        make_watchlist_candidate(ticker="C1", correlation_group="mega-cap-ai"),
+        make_watchlist_candidate(ticker="C2", correlation_group="mega-cap-ai"),
+        make_watchlist_candidate(ticker="U0", correlation_group="software"),
+    ]
+
+    document, next_state = build_daily_alert_document(
+        make_result(candidates, bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context={"qqq_below_20d_ma": True, "qqq_return_20d": -7.0},
+    )
+
+    assert document.summary.correlation_gate == "capped"
+    assert document.summary.correlation_group_cap == 2
+    assert document.summary.suppressed_by_correlation_count == 1
+    digest_event = [e for e in document.events if e.event_type == "digest_alert"][0]
+    assert [member["ticker"] for member in digest_event.payload["members"]] == ["C0", "C1", "U0"]
+    assert set(next_state.tickers) == {"C0", "C1", "U0"}
+
+
+def test_build_daily_alert_limits_single_candidate_sector_concentration_in_bearish_regime() -> None:
+    candidates = [
+        make_candidate(ticker="B0", sector="Technology"),
+        make_candidate(ticker="B1", sector="Technology"),
+        make_candidate(ticker="B2", sector="Technology"),
+    ]
+
+    document, next_state = build_daily_alert_document(
+        make_result(candidates, bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context={"qqq_below_20d_ma": True, "qqq_return_20d": -7.0},
+    )
+
+    assert document.summary.sector_concentration_gate == "capped"
+    assert document.summary.suppressed_by_sector_concentration_count == 1
+    assert [event.payload["ticker"] for event in document.events] == ["B0", "B1"]
+    assert set(next_state.tickers) == {"B0", "B1"}
