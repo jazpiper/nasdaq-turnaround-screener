@@ -171,10 +171,20 @@ def test_performance_dashboard_payload_and_markdown(tmp_path: Path) -> None:
 
     assert payload["schema_version"] == 1
     assert payload["backtest"]["forward_return_summary"][1]["horizon"] == "10d"
+    assert payload["investment_takeaway"]["verdict"] == "Not beating QQQ"
+    assert payload["investment_takeaway"]["best_horizon_by_return"]["horizon"] == "20d"
+    assert payload["investment_takeaway"]["best_tier_by_excess"]["tier"] == "avoid/high-risk"
     assert payload["tuning"]["status"] == "available"
     assert any("Backtest covers 36 trading days" in item for item in payload["backtest"]["highlights"])
+    assert any("QQQ verdict: Not beating QQQ" in item for item in payload["investment_takeaway"]["highlights"])
+    assert payload["investment_takeaway"]["risk"].startswith("Primary risk")
+    assert "positive excess vs QQQ" in payload["investment_takeaway"]["next_observation"]
     assert any("Tuning proposal available" in item for item in payload["tuning"]["highlights"])
-    assert "## Forward return summary" in markdown
+    assert "## Investment takeaway" in markdown
+    assert "QQQ verdict: Not beating QQQ" in markdown
+    assert "Risk: Primary risk is opportunity cost" in markdown
+    assert "Next observation: Wait for at least one core horizon" in markdown
+    assert "Best horizon: 20d has the strongest raw return (+4.56%)" in markdown
     assert "| 10d | 2219 | +1.50% | -1.46% | 51.2% |" in markdown
     assert "## Tier summary" in markdown
     assert "| buy-review | 10d | 53 | +0.01% | -3.36% | 50.9% |" in markdown
@@ -186,6 +196,29 @@ def test_performance_dashboard_payload_and_markdown(tmp_path: Path) -> None:
     assert markdown_path.exists()
     written = json.loads(json_path.read_text(encoding="utf-8"))
     assert written["source_paths"]["backtest_summary_path"] == "output/backtests/backtest-summary.json"
+
+
+def test_performance_dashboard_takeaway_treats_missing_excess_as_insufficient() -> None:
+    backtest_summary = {
+        "forward_return_summary": {
+            "5d": {"count": 10, "average_return_pct": 1.2, "average_excess_return_pct": None},
+            "10d": {"count": 8, "average_return_pct": 2.4},
+        },
+        "tier_forward_return_summary": {},
+    }
+
+    payload = build_performance_dashboard_payload(
+        backtest_summary,
+        generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
+        backtest_summary_path=Path("output/backtests/backtest-summary.json"),
+    )
+    markdown = build_performance_dashboard_markdown(payload)
+
+    assert payload["investment_takeaway"]["status"] == "insufficient"
+    assert payload["investment_takeaway"]["verdict"] == "insufficient data"
+    assert payload["investment_takeaway"]["best_horizon_by_excess"] is None
+    assert "QQQ verdict: insufficient data" in markdown
+    assert "Regenerate the backtest with benchmark excess returns" in markdown
 
 
 def test_performance_dashboard_command_writes_artifacts(tmp_path: Path) -> None:
@@ -216,6 +249,11 @@ def test_performance_dashboard_command_writes_artifacts(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "Backtest summary:" in result.stdout
     assert "Tuning status: available" in result.stdout
+    assert "Investment takeaway:" in result.stdout
+    assert "Action:" in result.stdout
+    assert "Risk:" in result.stdout
+    assert "Next observation:" in result.stdout
+    assert "Not beating QQQ" in result.stdout
     assert (output_dir / "performance-dashboard.json").exists()
     assert (output_dir / "performance-dashboard.md").exists()
     dashboard = json.loads((output_dir / "performance-dashboard.json").read_text(encoding="utf-8"))
@@ -234,4 +272,5 @@ def test_load_and_build_performance_dashboard_with_missing_optional_tuning(tmp_p
     )
 
     assert payload["tuning"]["status"] == "missing"
+    assert "## Investment takeaway" in markdown
     assert "No tuning artifacts found." in markdown

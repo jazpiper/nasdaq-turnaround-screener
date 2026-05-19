@@ -360,6 +360,10 @@ def performance_dashboard(
     typer.echo(f"Trading days: {payload['backtest'].get('trading_day_count', 'n/a')}")
     typer.echo(f"Candidate observations: {payload['backtest'].get('candidate_observation_count', 'n/a')}")
     typer.echo(f"Tuning status: {payload['tuning'].get('status', 'missing')}")
+    takeaway = payload.get("investment_takeaway", {})
+    typer.echo("Investment takeaway:")
+    for item in takeaway.get("highlights", []):
+        typer.echo(f"- {item}")
     if dry_run:
         typer.echo("Artifacts skipped (--dry-run).")
         return

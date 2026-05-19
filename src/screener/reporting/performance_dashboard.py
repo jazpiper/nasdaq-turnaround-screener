@@ -38,6 +38,7 @@ def build_performance_dashboard_payload(
     forward_summary = _summarize_forward_return_summary(backtest_summary.get("forward_return_summary", {}))
     tier_summary = _summarize_tier_forward_return_summary(backtest_summary.get("tier_forward_return_summary", {}))
     backtest_highlights = _build_backtest_highlights(backtest_summary, forward_summary, tier_summary)
+    investment_takeaway = _build_investment_takeaway(backtest_summary, forward_summary, tier_summary)
     tuning_summary = _build_tuning_summary(tuning_proposal, tuning_walkforward)
 
     payload: dict[str, Any] = {
@@ -61,6 +62,7 @@ def build_performance_dashboard_payload(
             "tier_forward_return_summary": tier_summary,
             "highlights": backtest_highlights,
         },
+        "investment_takeaway": investment_takeaway,
         "tuning": tuning_summary,
     }
     return payload
@@ -68,6 +70,7 @@ def build_performance_dashboard_payload(
 
 def build_performance_dashboard_markdown(payload: dict[str, Any]) -> str:
     backtest = dict(payload.get("backtest", {}))
+    takeaway = dict(payload.get("investment_takeaway", {}))
     tuning = dict(payload.get("tuning", {}))
     source_paths = dict(payload.get("source_paths", {}))
 
@@ -97,6 +100,14 @@ def build_performance_dashboard_markdown(payload: dict[str, Any]) -> str:
         lines.extend(f"- {item}" for item in highlights)
     else:
         lines.append("- No backtest highlights available.")
+
+    lines.append("")
+    lines.append("## Investment takeaway")
+    takeaway_highlights = list(takeaway.get("highlights", []))
+    if takeaway_highlights:
+        lines.extend(f"- {item}" for item in takeaway_highlights)
+    else:
+        lines.append("- No interpretation available.")
 
     lines.append("")
     lines.append("## Forward return summary")
@@ -307,6 +318,153 @@ def _build_backtest_highlights(
     return highlights
 
 
+def _build_investment_takeaway(
+    backtest_summary: dict[str, Any],
+    forward_rows: list[dict[str, Any]],
+    tier_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    horizon_rows = [row for row in forward_rows if row.get("horizon") is not None]
+    tier_rows = [row for row in tier_rows if row.get("tier") is not None and row.get("horizon") is not None]
+
+    if not horizon_rows:
+        return {
+            "available": False,
+            "status": "missing",
+            "verdict": "missing",
+            "best_horizon_by_excess": None,
+            "best_horizon_by_return": None,
+            "best_tier_by_excess": None,
+            "action": "No forward return summary is available yet.",
+            "risk": "Insufficient backtest evidence.",
+            "next_observation": "Generate forward return summary before changing deployment posture.",
+            "caveats": ["Forward return summary is missing, so no QQQ verdict can be made."],
+            "highlights": ["No forward return summary available."],
+        }
+
+    valid_excess_horizons = [row for row in horizon_rows if _numeric_or_none(row.get("average_excess_return_pct")) is not None]
+    if not valid_excess_horizons:
+        return {
+            "available": False,
+            "status": "insufficient",
+            "verdict": "insufficient data",
+            "best_horizon_by_excess": None,
+            "best_horizon_by_return": None,
+            "best_tier_by_excess": None,
+            "action": "Do not make a QQQ-relative deployment decision from this dashboard yet.",
+            "risk": "Forward return rows exist, but average excess vs QQQ is missing or non-numeric.",
+            "next_observation": "Regenerate the backtest with benchmark excess returns before changing deployment posture.",
+            "caveats": ["Forward return rows exist, but none have numeric average_excess_return_pct."],
+            "highlights": [
+                "QQQ verdict: insufficient data — no numeric average excess vs QQQ values are available.",
+                "Action: Do not make a QQQ-relative deployment decision from this dashboard yet.",
+                "Risk: Forward return rows exist, but average excess vs QQQ is missing or non-numeric.",
+                "Next observation: Regenerate the backtest with benchmark excess returns before changing deployment posture.",
+            ],
+        }
+
+    positive_horizons = [row for row in valid_excess_horizons if _numeric_or_negative_inf(row.get("average_excess_return_pct")) > 0]
+    negative_horizons = [row for row in valid_excess_horizons if _numeric_or_negative_inf(row.get("average_excess_return_pct")) < 0]
+    if len(positive_horizons) == len(valid_excess_horizons):
+        verdict = "Beating QQQ"
+    elif len(negative_horizons) == len(valid_excess_horizons):
+        verdict = "Not beating QQQ"
+    else:
+        verdict = "Mixed vs QQQ"
+
+    best_horizon_by_excess = max(
+        valid_excess_horizons,
+        key=lambda row: (
+            _numeric_or_negative_inf(row.get("average_excess_return_pct")),
+            _numeric_or_negative_inf(row.get("win_rate")),
+        ),
+    )
+    best_horizon_by_return = max(
+        horizon_rows,
+        key=lambda row: (
+            _numeric_or_negative_inf(row.get("average_return_pct")),
+            _numeric_or_negative_inf(row.get("win_rate")),
+        ),
+    )
+    best_tier_by_excess = None
+    if tier_rows:
+        best_tier_by_excess = max(
+            tier_rows,
+            key=lambda row: (
+                _numeric_or_negative_inf(row.get("average_excess_return_pct")),
+                _numeric_or_negative_inf(row.get("win_rate")),
+                _numeric_or_negative_inf(row.get("count")),
+            ),
+        )
+
+    if verdict == "Beating QQQ":
+        action = "Consider selective deployment and scale only after confirming stability."
+        risk = "Primary risk is over-scaling before walk-forward/live evidence confirms the backtest edge."
+        next_observation = "Watch whether the strongest horizon keeps positive excess vs QQQ in the next refreshed dashboard."
+    elif verdict == "Mixed vs QQQ":
+        action = "Use only selectively around the strongest horizon/tier; do not treat this as a broad benchmark-beater."
+        risk = "Primary risk is horizon cherry-picking: broad deployment can dilute the few stronger slices."
+        next_observation = "Track whether the current best horizon/tier remains positive vs QQQ across the next refresh."
+    else:
+        action = "Avoid broad deployment for now; keep it on a watchlist or trade only as a selective setup until excess vs QQQ turns positive."
+        risk = "Primary risk is opportunity cost: candidates can rise in absolute terms while still trailing QQQ."
+        next_observation = "Wait for at least one core horizon to show sustained positive excess vs QQQ before upgrading posture."
+
+    caveats: list[str] = []
+    horizon_count = len(valid_excess_horizons)
+    total_horizon_count = len(horizon_rows)
+    if horizon_count:
+        caveats.append(
+            f"QQQ verdict uses {horizon_count} numeric excess horizon rows out of {total_horizon_count} tracked horizons."
+        )
+    if len(negative_horizons) == len(valid_excess_horizons):
+        caveats.append("Every numeric tracked horizon trails QQQ on average, even where raw returns are positive.")
+    if best_tier_by_excess is not None:
+        best_tier_count = best_tier_by_excess.get("count")
+        if isinstance(best_tier_count, int) and best_tier_count < 100:
+            caveats.append(
+                f"The strongest tier slice only has {best_tier_count} samples, so its edge may not generalize."
+            )
+        tier_label = str(best_tier_by_excess.get("tier", "")).lower()
+        if "avoid" in tier_label or "risk" in tier_label:
+            caveats.append("The best tier label still reads like a caution bucket, so it is not a blanket buy signal.")
+    caveats.append("Tuning results are snapshot guidance, not proof of durable live outperformance.")
+
+    highlights = [
+        f"QQQ verdict: {verdict} — {len(positive_horizons)} of {horizon_count} horizons are above QQQ on average.",
+        "Best horizon: "
+        f"{best_horizon_by_return['horizon']} has the strongest raw return ({_format_pct(best_horizon_by_return.get('average_return_pct'))}) "
+        f"and win rate ({_format_rate(best_horizon_by_return.get('win_rate'))}); "
+        f"{best_horizon_by_excess['horizon']} is the least-bad vs QQQ with {_format_pct(best_horizon_by_excess.get('average_excess_return_pct'))} excess.",
+        (
+            "Best tier: "
+            f"{best_tier_by_excess['tier']} / {best_tier_by_excess['horizon']} has the strongest excess vs QQQ "
+            f"({_format_pct(best_tier_by_excess.get('average_excess_return_pct'))}) and {_format_rate(best_tier_by_excess.get('win_rate'))} win rate."
+            if best_tier_by_excess is not None
+            else "Best tier: no tier summary available."
+        ),
+        f"Action: {action}",
+        f"Risk: {risk}",
+        f"Next observation: {next_observation}",
+        f"Caveats: {' '.join(caveats)}",
+    ]
+
+    return {
+        "available": True,
+        "status": "available",
+        "verdict": verdict,
+        "positive_horizon_count": len(positive_horizons),
+        "horizon_count": horizon_count,
+        "best_horizon_by_excess": best_horizon_by_excess,
+        "best_horizon_by_return": best_horizon_by_return,
+        "best_tier_by_excess": best_tier_by_excess,
+        "action": action,
+        "risk": risk,
+        "next_observation": next_observation,
+        "caveats": caveats,
+        "highlights": highlights,
+    }
+
+
 def _build_tuning_summary(
     tuning_proposal: dict[str, Any] | None,
     tuning_walkforward: dict[str, Any] | None,
@@ -406,6 +564,13 @@ def _horizon_sort_key(label: Any) -> int:
         return int(text)
     except (TypeError, ValueError):
         return 10_000
+
+
+def _numeric_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _numeric_or_negative_inf(value: Any) -> float:
