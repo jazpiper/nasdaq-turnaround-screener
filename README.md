@@ -60,9 +60,16 @@ uv run python -m screener.cli.main build-daily-top3-recommendations \
   --daily-report-path output/daily/latest/daily-report.json \
   --db-path output/recommendations/recommendations.sqlite3 \
   --output-dir output/recommendations
+uv run python -m screener.cli.main update-recommendation-outcomes \
+  --db-path output/recommendations/recommendations.sqlite3 \
+  --prices-path output/recommendations/market-ohlc.json \
+  --as-of-date 2026-05-20
+uv run python -m screener.cli.main summarize-recommendation-outcomes \
+  --db-path output/recommendations/recommendations.sqlite3 \
+  --output-path output/recommendations/outcome-summary.json
 ```
 
-이 명령은 기존 daily report 후보를 재사용해 `daily-top3-v0` 기준 Top 3 추천 snapshot을 SQLite DB와 Markdown/JSON artifact로 저장합니다. 자동매수/브로커 연동은 하지 않습니다. 기본 artifact는 `output/recommendations/<DATE>/daily-top3-recommendations.{json,md}`이고, DB에는 `algorithm_versions`, `recommendation_runs`, `recommendations`, `recommendation_features`, `recommendation_outcomes` 테이블이 생성됩니다. 선정 방식은 universe filter → risk/exclusion gate → score components → diversification/tie-break → Top3 순서이며, artifact에는 `selection_method`가 포함됩니다. 추천별 가격 필드는 `reference_price`, `buy_limit_price`, `stop_loss_price`, `target_sell_price_1`, optional `target_sell_price_2`, `invalidation_price`, `risk_reward_ratio`, `expected_holding_days`, `time_stop_date`, `price_method`, `price_formula`입니다.
+이 명령은 기존 daily report 후보를 재사용해 `daily-top3-v0` 기준 Top 3 추천 snapshot을 SQLite DB와 Markdown/JSON artifact로 저장합니다. 자동매수/브로커 연동은 하지 않습니다. 기본 artifact는 `output/recommendations/<DATE>/daily-top3-recommendations.{json,md}`이고, DB에는 `algorithm_versions`, `recommendation_runs`, `recommendations`, `recommendation_features`, `recommendation_outcomes` 테이블이 생성됩니다. 선정 방식은 universe filter → risk/exclusion gate → score components → diversification/tie-break → Top3 순서이며, artifact에는 `selection_method`가 포함됩니다. 추천별 가격 필드는 `reference_price`, `buy_limit_price`, `stop_loss_price`, `target_sell_price_1`, optional `target_sell_price_2`, `invalidation_price`, `risk_reward_ratio`, `expected_holding_days`, `time_stop_date`, `price_method`, `price_formula`입니다. Outcome updater는 D+1/D+5/D+20/D+60 close return, SPY/QQQ 대비 return, max drawdown, buy_limit fill/no-fill, target/stop/invalidation touch, ambiguous same-candle flag를 저장하고, summary command는 algorithm_version별 hit rate, 평균/중앙 return, benchmark-adjusted return, sample size와 개선 제안 artifact를 생성합니다.
 
 ### Intraday
 ```bash

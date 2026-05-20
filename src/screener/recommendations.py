@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any, Iterable
 
 ALGORITHM_VERSION = "daily-top3-v0"
@@ -213,6 +214,22 @@ def initialize_recommendation_db(db_path: Path) -> None:
                 max_drawdown_pct real,
                 max_drawdown_available integer not null default 0,
                 drawdown_method text,
+                fill_status text,
+                fill_date text,
+                fill_price real,
+                target1_hit integer,
+                target1_hit_date text,
+                target2_hit integer,
+                target2_hit_date text,
+                stop_hit integer,
+                stop_hit_date text,
+                invalidation_hit integer,
+                invalidation_hit_date text,
+                ambiguous_touch integer not null default 0,
+                time_exit_return_pct real,
+                exit_reason text,
+                r_multiple real,
+                observation_note text,
                 outcome_status text not null default 'pending',
                 settled_at text
             );
@@ -263,6 +280,34 @@ def _ensure_recommendation_columns(conn: sqlite3.Connection) -> None:
             "target_sell_price_2": "real",
             "invalidation_price": "real",
             "price_method": "text",
+            "horizon_date": "text",
+            "exit_price": "real",
+            "absolute_return": "real",
+            "absolute_return_pct": "real",
+            "spy_return_pct": "real",
+            "qqq_return_pct": "real",
+            "relative_return_vs_spy_pct": "real",
+            "relative_return_vs_qqq_pct": "real",
+            "max_drawdown_pct": "real",
+            "max_drawdown_available": "integer not null default 0",
+            "drawdown_method": "text",
+            "fill_status": "text",
+            "fill_date": "text",
+            "fill_price": "real",
+            "target1_hit": "integer",
+            "target1_hit_date": "text",
+            "target2_hit": "integer",
+            "target2_hit_date": "text",
+            "stop_hit": "integer",
+            "stop_hit_date": "text",
+            "invalidation_hit": "integer",
+            "invalidation_hit_date": "text",
+            "ambiguous_touch": "integer not null default 0",
+            "time_exit_return_pct": "real",
+            "exit_reason": "text",
+            "r_multiple": "real",
+            "observation_note": "text",
+            "settled_at": "text",
         }.items():
             if name not in existing:
                 conn.execute(f"alter table recommendation_outcomes add column {name} {ddl}")
@@ -660,3 +705,234 @@ def build_daily_top3_recommendations(
         markdown_path=markdown_path,
         payload=payload,
     )
+
+
+def _parse_date(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    return datetime.fromisoformat(str(value)).date()
+
+
+def _price_rows_for_ticker(prices_by_ticker: dict[str, Any], ticker: str) -> list[tuple[date, dict[str, Any]]]:
+    raw = prices_by_ticker.get(ticker) or prices_by_ticker.get(ticker.upper()) or {}
+    rows: list[tuple[date, dict[str, Any]]] = []
+    if isinstance(raw, dict):
+        iterable = raw.items()
+    elif isinstance(raw, list):
+        iterable = ((item.get("date"), item) for item in raw if isinstance(item, dict))
+    else:
+        iterable = []
+    for raw_date, values in iterable:
+        if raw_date is None or not isinstance(values, dict):
+            continue
+        try:
+            rows.append((_parse_date(raw_date), values))
+        except ValueError:
+            continue
+    return sorted(rows, key=lambda item: item[0])
+
+
+def _close_return_pct(rows: list[tuple[date, dict[str, Any]]], start_date: date, horizon_date: date, entry_price: float | None = None) -> tuple[float | None, float | None]:
+    row = next((values for day, values in rows if day == horizon_date), None)
+    if row is None:
+        return None, None
+    exit_price = _as_float(row.get("close"))
+    if exit_price is None:
+        return None, None
+    base = entry_price
+    if base is None:
+        base_row = next((values for day, values in rows if day == start_date), None)
+        base = _as_float(base_row.get("close")) if base_row else None
+    if base is None or base == 0:
+        return exit_price, None
+    return exit_price, round((exit_price - base) / base * 100, 2)
+
+
+def _first_touch(rows: list[tuple[date, dict[str, Any]]], threshold: float | None, field: str, start_date: date, end_date: date | None = None) -> tuple[int, str | None]:
+    if threshold is None:
+        return 0, None
+    for day, values in rows:
+        if day < start_date:
+            continue
+        if end_date is not None and day > end_date:
+            continue
+        value = _as_float(values.get(field))
+        if value is None:
+            continue
+        if field == "high" and value >= threshold:
+            return 1, day.isoformat()
+        if field == "low" and value <= threshold:
+            return 1, day.isoformat()
+    return 0, None
+
+
+def _max_drawdown_pct(rows: list[tuple[date, dict[str, Any]]], start_date: date, horizon_date: date, entry_price: float) -> float | None:
+    lows = [_as_float(values.get("low")) for day, values in rows if start_date <= day <= horizon_date]
+    lows = [value for value in lows if value is not None]
+    if not lows or entry_price == 0:
+        return None
+    return round((min(lows) - entry_price) / entry_price * 100, 2)
+
+
+def update_recommendation_outcomes(*, db_path: Path, prices_by_ticker: dict[str, Any], as_of_date: str | date | None = None) -> dict[str, Any]:
+    initialize_recommendation_db(db_path)
+    as_of = _parse_date(as_of_date or datetime.now(timezone.utc).date().isoformat())
+    settled = 0
+    pending = 0
+    no_fill = 0
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            select o.outcome_id, o.horizon_days, o.entry_date, o.entry_price,
+                   o.stop_loss_price, o.target_sell_price_1, o.target_sell_price_2, o.invalidation_price,
+                   r.ticker, r.algorithm_version, r.buy_limit_price
+            from recommendation_outcomes o
+            join recommendations r on r.recommendation_id = o.recommendation_id
+            where o.outcome_status = 'pending'
+            order by o.outcome_id
+            """
+        ).fetchall()
+        for row in rows:
+            entry_date = _parse_date(row["entry_date"])
+            horizon_date = entry_date + timedelta(days=int(row["horizon_days"]))
+            ticker_rows = _price_rows_for_ticker(prices_by_ticker, row["ticker"])
+            horizon_rows = [(day, values) for day, values in ticker_rows if entry_date < day <= horizon_date]
+            if horizon_date > as_of or not any(day == horizon_date for day, _ in ticker_rows):
+                conn.execute(
+                    "update recommendation_outcomes set horizon_date = ?, observation_note = ? where outcome_id = ?",
+                    (horizon_date.isoformat(), "insufficient_future_prices", row["outcome_id"]),
+                )
+                pending += 1
+                continue
+            entry_price = _as_float(row["entry_price"])
+            buy_limit = _as_float(row["buy_limit_price"]) or entry_price
+            fill_day = None
+            for day, values in horizon_rows:
+                low = _as_float(values.get("low"))
+                if buy_limit is not None and low is not None and low <= buy_limit:
+                    fill_day = day
+                    break
+            if fill_day is None:
+                conn.execute(
+                    """
+                    update recommendation_outcomes
+                    set horizon_date = ?, outcome_status = 'no_fill', fill_status = 'no_fill', observation_note = ?, settled_at = ?
+                    where outcome_id = ?
+                    """,
+                    (horizon_date.isoformat(), "buy_limit_not_touched", _iso_now(), row["outcome_id"]),
+                )
+                no_fill += 1
+                settled += 1
+                continue
+            exit_price, absolute_return_pct = _close_return_pct(ticker_rows, entry_date, horizon_date, buy_limit)
+            spy_exit, spy_return = _close_return_pct(_price_rows_for_ticker(prices_by_ticker, DEFAULT_BENCHMARK_PRIMARY), entry_date, horizon_date)
+            qqq_exit, qqq_return = _close_return_pct(_price_rows_for_ticker(prices_by_ticker, DEFAULT_BENCHMARK_SECONDARY), entry_date, horizon_date)
+            _ = (spy_exit, qqq_exit)
+            rel_spy = round(absolute_return_pct - spy_return, 2) if absolute_return_pct is not None and spy_return is not None else None
+            rel_qqq = round(absolute_return_pct - qqq_return, 2) if absolute_return_pct is not None and qqq_return is not None else None
+            target1_hit, target1_date = _first_touch(ticker_rows, _as_float(row["target_sell_price_1"]), "high", fill_day, horizon_date)
+            target2_hit, target2_date = _first_touch(ticker_rows, _as_float(row["target_sell_price_2"]), "high", fill_day, horizon_date)
+            stop_hit, stop_date = _first_touch(ticker_rows, _as_float(row["stop_loss_price"]), "low", fill_day, horizon_date)
+            invalid_hit, invalid_date = _first_touch(ticker_rows, _as_float(row["invalidation_price"]), "low", fill_day, horizon_date)
+            ambiguous = 1 if target1_date is not None and stop_date is not None and target1_date == stop_date else 0
+            exit_reason = "horizon_close"
+            if ambiguous:
+                exit_reason = "ambiguous_target_stop_same_candle_conservative"
+            elif target1_hit:
+                exit_reason = "target1_hit" if target1_date and _parse_date(target1_date) <= horizon_date else "target1_hit_after_horizon"
+            elif stop_hit:
+                exit_reason = "stop_hit" if stop_date and _parse_date(stop_date) <= horizon_date else "stop_hit_after_horizon"
+            drawdown = _max_drawdown_pct(ticker_rows, fill_day, horizon_date, buy_limit or 0)
+            risk = None
+            stop = _as_float(row["stop_loss_price"])
+            if buy_limit is not None and stop is not None:
+                risk = buy_limit - stop
+            r_multiple = round(((exit_price or buy_limit or 0) - (buy_limit or 0)) / risk, 2) if risk and risk != 0 else None
+            absolute_return = round((exit_price or 0) - (buy_limit or 0), 4) if exit_price is not None and buy_limit is not None else None
+            conn.execute(
+                """
+                update recommendation_outcomes
+                set horizon_date = ?, exit_price = ?, absolute_return = ?, absolute_return_pct = ?,
+                    spy_return_pct = ?, qqq_return_pct = ?, relative_return_vs_spy_pct = ?, relative_return_vs_qqq_pct = ?,
+                    max_drawdown_pct = ?, max_drawdown_available = ?, drawdown_method = ?, outcome_status = 'settled',
+                    fill_status = 'filled', fill_date = ?, fill_price = ?, target1_hit = ?, target1_hit_date = ?,
+                    target2_hit = ?, target2_hit_date = ?, stop_hit = ?, stop_hit_date = ?, invalidation_hit = ?,
+                    invalidation_hit_date = ?, ambiguous_touch = ?, time_exit_return_pct = ?, exit_reason = ?,
+                    r_multiple = ?, observation_note = null, settled_at = ?
+                where outcome_id = ?
+                """,
+                (
+                    horizon_date.isoformat(), exit_price, absolute_return, absolute_return_pct,
+                    spy_return, qqq_return, rel_spy, rel_qqq, drawdown, 1 if drawdown is not None else 0,
+                    "low_vs_fill_to_horizon" if drawdown is not None else None, fill_day.isoformat(), buy_limit,
+                    target1_hit, target1_date, target2_hit, target2_date, stop_hit, stop_date, invalid_hit,
+                    invalid_date, ambiguous, absolute_return_pct, exit_reason, r_multiple, _iso_now(), row["outcome_id"]
+                ),
+            )
+            settled += 1
+    return {"settled_outcomes": settled, "pending_outcomes": pending, "no_fill_outcomes": no_fill}
+
+
+def _pct(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator * 100, 2) if denominator else 0.0
+
+
+def _avg(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 2) if values else None
+
+
+def summarize_recommendation_outcomes(*, db_path: Path, output_path: Path | None = None) -> dict[str, Any]:
+    initialize_recommendation_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        versions = conn.execute(
+            """
+            select r.algorithm_version, o.outcome_status, o.absolute_return_pct, o.relative_return_vs_spy_pct,
+                   o.relative_return_vs_qqq_pct, o.target1_hit, o.stop_hit, o.ambiguous_touch, o.fill_status,
+                   o.r_multiple, r.risk_adjusted_score, r.price_method
+            from recommendation_outcomes o
+            join recommendations r on r.recommendation_id = o.recommendation_id
+            where o.outcome_status in ('settled', 'no_fill')
+            order by r.algorithm_version, o.outcome_id
+            """
+        ).fetchall()
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in versions:
+        grouped.setdefault(row["algorithm_version"], []).append(row)
+    summaries: list[dict[str, Any]] = []
+    for version, rows in grouped.items():
+        sample_size = len(rows)
+        returns = [float(row["absolute_return_pct"]) for row in rows if row["absolute_return_pct"] is not None]
+        rel_spy = [float(row["relative_return_vs_spy_pct"]) for row in rows if row["relative_return_vs_spy_pct"] is not None]
+        rel_qqq = [float(row["relative_return_vs_qqq_pct"]) for row in rows if row["relative_return_vs_qqq_pct"] is not None]
+        r_values = [float(row["r_multiple"]) for row in rows if row["r_multiple"] is not None]
+        summaries.append({
+            "algorithm_version": version,
+            "sample_size": sample_size,
+            "hit_rate_pct": _pct(sum(1 for value in returns if value > 0), sample_size),
+            "target1_hit_rate_pct": _pct(sum(1 for row in rows if row["target1_hit"]), sample_size),
+            "stop_hit_rate_pct": _pct(sum(1 for row in rows if row["stop_hit"]), sample_size),
+            "no_fill_rate_pct": _pct(sum(1 for row in rows if row["fill_status"] == "no_fill"), sample_size),
+            "ambiguous_count": sum(1 for row in rows if row["ambiguous_touch"]),
+            "avg_absolute_return_pct": _avg(returns),
+            "median_absolute_return_pct": round(float(median(returns)), 2) if returns else None,
+            "avg_relative_return_vs_spy_pct": _avg(rel_spy),
+            "avg_relative_return_vs_qqq_pct": _avg(rel_qqq),
+            "avg_r_multiple": _avg(r_values),
+            "score_buckets": {},
+            "price_methods": sorted({str(row["price_method"]) for row in rows if row["price_method"]}),
+        })
+    suggestions = []
+    for item in summaries:
+        if item["no_fill_rate_pct"] > 25:
+            suggestions.append(f"{item['algorithm_version']}: buy_limit formula may be too restrictive; review no-fill rate.")
+        if item["stop_hit_rate_pct"] > item["target1_hit_rate_pct"]:
+            suggestions.append(f"{item['algorithm_version']}: stop hits exceed target hits; review risk gates and stop distance.")
+    if not suggestions:
+        suggestions.append("No automatic algorithm changes applied; monitor sample size before changing thresholds.")
+    payload = {"schema_version": 1, "generated_at": _iso_now(), "algorithm_versions": summaries, "improvement_suggestions": suggestions}
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(_json_dumps(payload) + "\n", encoding="utf-8")
+    return payload

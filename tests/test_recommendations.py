@@ -7,7 +7,12 @@ from typing import Any, cast
 from typer.testing import CliRunner
 
 from screener.cli.main import app
-from screener.recommendations import build_daily_top3_recommendations, initialize_recommendation_db
+from screener.recommendations import (
+    build_daily_top3_recommendations,
+    initialize_recommendation_db,
+    summarize_recommendation_outcomes,
+    update_recommendation_outcomes,
+)
 
 
 def _candidate(ticker: str, risk_adjusted: int, score: int, **overrides: object) -> dict[str, object]:
@@ -296,3 +301,171 @@ def test_cli_build_daily_top3_recommendations_writes_report(tmp_path: Path) -> N
     assert "Selected recommendations: 1" in result.output
     assert (output_dir / "2026-05-19" / "daily-top3-recommendations.md").exists()
     assert db_path.exists()
+
+
+def _ohlcv(close: float, *, high: float | None = None, low: float | None = None) -> dict[str, float]:
+    return {"open": close, "high": high if high is not None else close, "low": low if low is not None else close, "close": close}
+
+
+def _market_prices() -> dict[str, dict[str, dict[str, float]]]:
+    return {
+        "AAA": {
+            "2026-05-20": _ohlcv(102.0, high=103.0, low=101.0),
+            "2026-05-21": _ohlcv(110.0, high=113.0, low=102.0),
+            "2026-05-24": _ohlcv(106.0, high=108.0, low=96.0),
+            "2026-06-08": _ohlcv(115.0, high=116.0, low=95.0),
+            "2026-07-18": _ohlcv(130.0, high=132.0, low=94.0),
+        },
+        "SPY": {
+            "2026-05-19": _ohlcv(500.0),
+            "2026-05-20": _ohlcv(505.0),
+            "2026-05-24": _ohlcv(510.0),
+            "2026-06-08": _ohlcv(520.0),
+            "2026-07-18": _ohlcv(550.0),
+        },
+        "QQQ": {
+            "2026-05-19": _ohlcv(400.0),
+            "2026-05-20": _ohlcv(404.0),
+            "2026-05-24": _ohlcv(408.0),
+            "2026-06-08": _ohlcv(416.0),
+            "2026-07-18": _ohlcv(440.0),
+        },
+    }
+
+
+def test_update_recommendation_outcomes_settles_horizons_and_price_simulation(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+    report_path.write_text(json.dumps(_daily_report([_candidate("AAA", 70, 78)])), encoding="utf-8")
+    build_daily_top3_recommendations(daily_report_path=report_path, db_path=db_path, output_dir=output_dir)
+
+    result = update_recommendation_outcomes(
+        db_path=db_path,
+        prices_by_ticker=_market_prices(),
+        as_of_date="2026-07-20",
+    )
+
+    assert result["settled_outcomes"] == 4
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            select horizon_label, horizon_date, exit_price, absolute_return_pct,
+                   spy_return_pct, qqq_return_pct, relative_return_vs_spy_pct,
+                   max_drawdown_pct, max_drawdown_available, outcome_status,
+                   fill_status, fill_date, fill_price, target1_hit, target1_hit_date,
+                   stop_hit, stop_hit_date, exit_reason, r_multiple
+            from recommendation_outcomes
+            where horizon_days = 1
+            """
+        ).fetchone()
+    assert row == (
+        "D+1",
+        "2026-05-20",
+        102.0,
+        0.99,
+        1.0,
+        1.0,
+        -0.01,
+        0.0,
+        1,
+        "settled",
+        "filled",
+        "2026-05-20",
+        101.0,
+        0,
+        None,
+        0,
+        None,
+        "horizon_close",
+        0.11,
+    )
+
+
+def test_update_recommendation_outcomes_marks_no_fill_and_unobservable(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+    report_path.write_text(json.dumps(_daily_report([_candidate("AAA", 70, 78)])), encoding="utf-8")
+    build_daily_top3_recommendations(daily_report_path=report_path, db_path=db_path, output_dir=output_dir)
+
+    prices = _market_prices()
+    prices["AAA"] = {"2026-05-20": _ohlcv(103.0, high=105.0, low=102.0)}
+    result = update_recommendation_outcomes(db_path=db_path, prices_by_ticker=prices, as_of_date="2026-05-20")
+
+    assert result["settled_outcomes"] == 1
+    with sqlite3.connect(db_path) as conn:
+        statuses = conn.execute(
+            "select horizon_label, outcome_status, observation_note, fill_status from recommendation_outcomes order by horizon_days"
+        ).fetchall()
+    assert statuses == [
+        ("D+1", "no_fill", "buy_limit_not_touched", "no_fill"),
+        ("D+5", "pending", "insufficient_future_prices", None),
+        ("D+20", "pending", "insufficient_future_prices", None),
+        ("D+60", "pending", "insufficient_future_prices", None),
+    ]
+
+
+def test_summarize_recommendation_outcomes_by_algorithm_version(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+    report_path.write_text(json.dumps(_daily_report([_candidate("AAA", 70, 78)])), encoding="utf-8")
+    build_daily_top3_recommendations(daily_report_path=report_path, db_path=db_path, output_dir=output_dir)
+    update_recommendation_outcomes(db_path=db_path, prices_by_ticker=_market_prices(), as_of_date="2026-07-20")
+
+    artifact_path = tmp_path / "summary.json"
+    summary = summarize_recommendation_outcomes(db_path=db_path, output_path=artifact_path)
+
+    assert artifact_path.exists()
+    version = summary["algorithm_versions"][0]
+    assert version["algorithm_version"] == "daily-top3-v0"
+    assert version["sample_size"] == 4
+    assert version["hit_rate_pct"] == 100.0
+    assert version["target1_hit_rate_pct"] == 75.0
+    assert version["stop_hit_rate_pct"] == 0.0
+    assert version["no_fill_rate_pct"] == 0.0
+    assert version["avg_absolute_return_pct"] == 12.13
+    assert version["median_absolute_return_pct"] == 9.4
+    assert version["avg_relative_return_vs_spy_pct"] == 7.88
+    assert "improvement_suggestions" in summary
+
+
+def test_cli_update_and_summarize_recommendation_outcomes(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    prices_path = tmp_path / "prices.json"
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+    summary_path = tmp_path / "summary.json"
+    report_path.write_text(json.dumps(_daily_report([_candidate("AAA", 70, 78)])), encoding="utf-8")
+    prices_path.write_text(json.dumps(_market_prices()), encoding="utf-8")
+    build_daily_top3_recommendations(daily_report_path=report_path, db_path=db_path, output_dir=output_dir)
+
+    update_result = CliRunner().invoke(
+        app,
+        [
+            "update-recommendation-outcomes",
+            "--db-path",
+            str(db_path),
+            "--prices-path",
+            str(prices_path),
+            "--as-of-date",
+            "2026-07-20",
+        ],
+    )
+    assert update_result.exit_code == 0, update_result.output
+    assert "Settled outcomes: 4" in update_result.output
+
+    summary_result = CliRunner().invoke(
+        app,
+        [
+            "summarize-recommendation-outcomes",
+            "--db-path",
+            str(db_path),
+            "--output-path",
+            str(summary_path),
+        ],
+    )
+    assert summary_result.exit_code == 0, summary_result.output
+    assert "Outcome summary JSON" in summary_result.output
+    assert summary_path.exists()

@@ -97,7 +97,9 @@ uv run python -m screener.cli.main build-daily-top3-recommendations \
 - 추천별 가격 필드는 `reference_price`, `buy_limit_price`, `stop_loss_price`, `target_sell_price_1`, optional `target_sell_price_2`, `invalidation_price`, `risk_reward_ratio`, `expected_holding_days`, `time_stop_date`, `price_method`, `price_formula`입니다. 현재 `close_based_v1` 산식은 최신 종가를 기준가로 쓰고 매수상한=기준가*1.01, 손절/무효화=기준가*0.92, 목표1/2=기준가*1.12/1.24, R/R=(목표1-기준가)/(기준가-손절)입니다.
 - Markdown은 각 Top3 항목에 기준가, 매수가(상한), 목표 매도가 1/2, 손절/무효화가, R/R·기간·산식을 눈에 띄게 표시합니다.
 - SQLite `recommendations`와 `recommendation_outcomes`는 위 가격 필드를 함께 저장해 outcome tracking이 추천 당시 immutable snapshot과 이후 실제 OHLC를 비교할 수 있게 합니다.
-- outcome row는 D+1/D+5/D+20/D+60을 `pending`으로 생성합니다. 사후 settlement 계산은 별도 후속 기능이며 현재 명령은 selection snapshot만 저장합니다.
+- outcome row는 D+1/D+5/D+20/D+60을 `pending`으로 생성합니다. `update-recommendation-outcomes`는 JSON OHLC source(`{TICKER: {YYYY-MM-DD: {open, high, low, close}}}` 또는 date field가 있는 list)를 받아 각 horizon을 settlement합니다.
+- settlement는 buy_limit_price가 horizon 구간 OHLC low에 닿으면 `filled`, 닿지 않으면 terminal `no_fill`로 기록합니다. 체결 후 horizon close return, SPY/QQQ 대비 return, max drawdown, target1/target2/stop/invalidation 첫 touch 날짜, target/stop same-candle ambiguous flag, time_exit_return_pct, R multiple, observation_note를 저장합니다. horizon 날짜의 close가 없거나 as-of-date가 horizon 전이면 `pending`과 `insufficient_future_prices`로 둡니다.
+- `summarize-recommendation-outcomes`는 algorithm_version별 sample size, hit rate, target/stop/no-fill/ambiguous, avg/median return, benchmark-adjusted return, avg R multiple, price method, 개선 제안만 생성하며 알고리즘을 자동 변경하지 않습니다.
 - hard gate는 임박 실적(3일 이내), 심한 주봉 훼손, risk-adjusted score 누락을 제외합니다. 정렬은 `risk_adjusted_score desc`, `final_score desc`, `ticker asc` 입니다.
 - 이 명령은 advisory artifact만 만들며 자동매수, 주문, 브로커 API 호출을 절대 수행하지 않습니다.
 
@@ -106,6 +108,11 @@ Cron prompt 초안:
 After the daily screener run succeeds, read output/daily/latest/daily-report.json and run:
 uv run python -m screener.cli.main build-daily-top3-recommendations --daily-report-path output/daily/latest/daily-report.json --db-path output/recommendations/recommendations.sqlite3 --output-dir output/recommendations
 Then send output/recommendations/<NY_DATE>/daily-top3-recommendations.md to the Telegram summary channel. Do not place trades or call broker APIs.
+
+After each market close or once enough future OHLC exists, run:
+uv run python -m screener.cli.main update-recommendation-outcomes --db-path output/recommendations/recommendations.sqlite3 --prices-path output/recommendations/market-ohlc.json --as-of-date <NY_DATE>
+uv run python -m screener.cli.main summarize-recommendation-outcomes --db-path output/recommendations/recommendations.sqlite3 --output-path output/recommendations/outcome-summary.json
+Send only the summary artifact/improvement suggestions for review. Do not auto-edit recommendation thresholds or price formulas.
 ```
 
 ## 5. Intraday Collection

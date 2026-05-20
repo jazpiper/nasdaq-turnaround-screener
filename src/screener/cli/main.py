@@ -14,7 +14,11 @@ from screener.collector import CollectionResult, TwelveDataWindowCollector
 from screener.config import Settings, get_settings
 from screener.models import ScreenRunResult
 from screener.pipeline import ScreenPipeline, build_context
-from screener.recommendations import build_daily_top3_recommendations
+from screener.recommendations import (
+    build_daily_top3_recommendations,
+    summarize_recommendation_outcomes,
+    update_recommendation_outcomes,
+)
 from screener.reporting.assistant_briefing import (
     build_assistant_briefing_markdown,
     build_assistant_briefing_payload,
@@ -216,6 +220,56 @@ def build_daily_top3_recommendations_command(
     typer.echo(f"Recommendation JSON: {result.json_path}")
     typer.echo(f"Recommendation markdown: {result.markdown_path}")
     typer.echo(f"Recommendation SQLite DB: {db_path}")
+
+
+@app.command("update-recommendation-outcomes")
+def update_recommendation_outcomes_command(
+    db_path: Path = typer.Option(
+        Path("output/recommendations/recommendations.sqlite3"),
+        "--db-path",
+        help="SQLite recommendation snapshot DB path.",
+    ),
+    prices_path: Path = typer.Option(..., "--prices-path", help="JSON OHLC price fixture/source path keyed by ticker and date."),
+    as_of_date: str | None = typer.Option(None, "--as-of-date", help="Observation date in YYYY-MM-DD format. Defaults to today UTC."),
+) -> None:
+    try:
+        prices = json.loads(prices_path.read_text(encoding="utf-8"))
+        result = update_recommendation_outcomes(db_path=db_path, prices_by_ticker=prices, as_of_date=as_of_date)
+    except FileNotFoundError as exc:
+        typer.echo(f"Price source not found: {prices_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Price source is not valid JSON: {prices_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+        typer.echo(f"Recommendation outcome update failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Settled outcomes: {result['settled_outcomes']}")
+    typer.echo(f"No-fill outcomes: {result['no_fill_outcomes']}")
+    typer.echo(f"Pending outcomes: {result['pending_outcomes']}")
+    typer.echo(f"Recommendation SQLite DB: {db_path}")
+
+
+@app.command("summarize-recommendation-outcomes")
+def summarize_recommendation_outcomes_command(
+    db_path: Path = typer.Option(
+        Path("output/recommendations/recommendations.sqlite3"),
+        "--db-path",
+        help="SQLite recommendation snapshot DB path.",
+    ),
+    output_path: Path = typer.Option(
+        Path("output/recommendations/outcome-summary.json"),
+        "--output-path",
+        help="JSON summary artifact path.",
+    ),
+) -> None:
+    try:
+        summary = summarize_recommendation_outcomes(db_path=db_path, output_path=output_path)
+    except (OSError, sqlite3.DatabaseError) as exc:
+        typer.echo(f"Recommendation outcome summary failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Algorithm versions: {len(summary['algorithm_versions'])}")
+    typer.echo(f"Outcome summary JSON: {output_path}")
 
 
 @app.command("collect-window")
