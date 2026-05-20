@@ -53,6 +53,17 @@ uv run python -m screener.cli.main build-assistant-briefing --report-path output
 
 Reads `output/daily/latest/daily-report.json` by default and writes compact assistant artifacts under `output/assistant/`. The default artifact names remain `latest-user-briefing-screener.{json,md}`; `--artifact-basename latest-user-watchlist-screener` writes a separate `latest-user-watchlist-screener.{json,md}` pair. Candidate briefing items include normalized `source_provenance`, sector/QQQ `relative_strength_context` with `sector_proxy`/`setup_context`, `risk_flags`, `why_not_buy_review_qualified`, and `what_would_need_to_improve`; see `docs/operations.md` for field semantics and fallback behavior. Signals are decision-support only and the briefing labels them as 관심/검토/보류, not buy/sell advice.
 
+### Daily Top 3 recommendations
+```bash
+uv run python -m screener.cli.main build-daily-top3-recommendations
+uv run python -m screener.cli.main build-daily-top3-recommendations \
+  --daily-report-path output/daily/latest/daily-report.json \
+  --db-path output/recommendations/recommendations.sqlite3 \
+  --output-dir output/recommendations
+```
+
+이 명령은 기존 daily report 후보를 재사용해 `daily-top3-v0` 기준 Top 3 추천 snapshot을 SQLite DB와 Markdown/JSON artifact로 저장합니다. 자동매수/브로커 연동은 하지 않습니다. 기본 artifact는 `output/recommendations/<DATE>/daily-top3-recommendations.{json,md}`이고, DB에는 `algorithm_versions`, `recommendation_runs`, `recommendations`, `recommendation_features`, `recommendation_outcomes` 테이블이 생성됩니다.
+
 ### Intraday
 ```bash
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0

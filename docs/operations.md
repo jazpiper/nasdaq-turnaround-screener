@@ -80,7 +80,31 @@ uv run python -m screener.cli.main build-assistant-briefing \
 - `--dry-run` 은 source report를 읽고 briefing을 구성하지만 artifact를 쓰지 않습니다.
 - 모든 신호는 technical/research 기반 decision-support 용도이며 buy/sell advice가 아닙니다.
 
-## 4. Intraday Collection
+## 4. Daily Top 3 Recommendation Artifacts
+```bash
+uv run python -m screener.cli.main build-daily-top3-recommendations
+uv run python -m screener.cli.main build-daily-top3-recommendations \
+  --daily-report-path output/daily/latest/daily-report.json \
+  --db-path output/recommendations/recommendations.sqlite3 \
+  --output-dir output/recommendations
+```
+
+- 입력은 기존 daily run이 만든 `daily-report.json` 입니다. 외부 API key가 없거나 새 daily fetch를 원하지 않는 경우에도 이미 생성된 fixture/기존 artifact 기반으로 재현 가능합니다.
+- 출력은 `output/recommendations/<NY_DATE>/daily-top3-recommendations.json` 및 `.md` 입니다. Markdown은 Telegram cron/LLM consumer가 바로 읽기 쉽게 Top 3, 왜 이 3개인가, 주의점, DB 반영 상태 섹션을 포함합니다.
+- SQLite DB 기본 경로는 `output/recommendations/recommendations.sqlite3` 입니다. 테이블은 `algorithm_versions`, `recommendation_runs`, `recommendations`, `recommendation_features`, `recommendation_outcomes` 입니다.
+- 추천 snapshot은 선정 시점 가격, score/subscore/penalty, rationale, risk flags, data quality, source freshness, SPY/QQQ benchmark context, 원본 feature snapshot을 저장합니다.
+- outcome row는 D+1/D+5/D+20/D+60을 `pending`으로 생성합니다. 사후 settlement 계산은 별도 후속 기능이며 현재 명령은 selection snapshot만 저장합니다.
+- hard gate는 임박 실적(3일 이내), 심한 주봉 훼손, risk-adjusted score 누락을 제외합니다. 정렬은 `risk_adjusted_score desc`, `final_score desc`, `ticker asc` 입니다.
+- 이 명령은 advisory artifact만 만들며 자동매수, 주문, 브로커 API 호출을 절대 수행하지 않습니다.
+
+Cron prompt 초안:
+```text
+After the daily screener run succeeds, read output/daily/latest/daily-report.json and run:
+uv run python -m screener.cli.main build-daily-top3-recommendations --daily-report-path output/daily/latest/daily-report.json --db-path output/recommendations/recommendations.sqlite3 --output-dir output/recommendations
+Then send output/recommendations/<NY_DATE>/daily-top3-recommendations.md to the Telegram summary channel. Do not place trades or call broker APIs.
+```
+
+## 5. Intraday Collection
 ```bash
 # raw CLI 기본값: 6분할 계획 중 1개 window, 8 credits/min
 uv run python -m screener.cli.main collect-window --date 2026-04-21 --window-index 0
@@ -107,7 +131,7 @@ uv run python scripts/run_intraday_window.py --date 2026-04-21 --window-id open-
 - OpenClaw는 intraday consumer entrypoint로 `output/intraday/<NY_DATE>/latest-alert-events.json` 을 읽으면 됩니다.
 - `collect-window` CLI stdout은 `Failures` 만 바로 보여주므로, 일일 크레딧 소진으로 인한 미시도 ticker 수는 `collection-metadata.json` 의 `skipped_due_to_credit_exhaustion_count` 로 확인하는 편이 정확합니다.
 
-## 5. Backtest
+## 6. Backtest
 ```bash
 uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21
 uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2026-04-21 --horizons 5,10,20
@@ -117,7 +141,7 @@ uv run python -m screener.cli.main backtest --start-date 2026-03-01 --end-date 2
 - artifact는 기본적으로 `output/backtests/` 아래에 생성됩니다.
 - `generate_observations()` 가 분리되어 있어 tuning 루프가 동일 관찰치를 재활용합니다.
 
-## 6. Threshold Tuning (Walk-Forward)
+## 7. Threshold Tuning (Walk-Forward)
 
 ### 튜닝 실행
 ```bash
@@ -160,7 +184,7 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 
 주의: 자동 적용 없음. 사람이 `tuning-diff.md` 를 검토하고 `--write` 를 명시적으로 실행해야 합니다.
 
-## 7. Environment and Secrets
+## 8. Environment and Secrets
 - `SCREENER_MARKET_DATA_PROVIDER`: daily provider override (`yfinance`, `twelve-data`, `finnhub`, `fmp`, 또는 `finnhub,twelve-data,fmp,yfinance` 같은 comma-separated fallback chain). 기본값은 `finnhub,twelve-data,fmp,yfinance` 입니다.
 - `TWELVE_DATA_API_KEY`: Twelve Data API key
 - `TWELVE_DATA_BASE_URL`: Twelve Data endpoint override. API key가 query string으로 붙으므로 public routable `http(s)` endpoint만 허용되며, localhost/private IP/userinfo URL은 거부됩니다.
@@ -178,7 +202,7 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 
 환경변수가 없으면 기본적으로 `~/.openclaw/secrets.json` 에서 provider / Oracle credential을 읽습니다.
 
-## 8. Oracle SQL Notes
+## 9. Oracle SQL Notes
 ```bash
 uv run python -m screener.cli.main init-oracle-schema
 ```
@@ -190,7 +214,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - `risk_adjusted_score` 같은 새 저장 컬럼이 추가된 배포 후에는 기존 DB에도 같은 명령을 다시 1회 실행해 additive migration을 적용해야 합니다.
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
-## 9. OpenClaw Usage
+## 10. OpenClaw Usage
 - 이 저장소는 cron 정의를 포함하지 않습니다. OpenClaw가 외부에서 명령을 호출하는 전제를 둡니다.
 - 장중 수집은 `uv run python scripts/run_intraday_window.py --window-id <ID> --skip-install --persist-oracle-sql` 형태로 호출하면 됩니다. wrapper가 `America/New_York` 현재 날짜를 자동 적용합니다.
 - 장 마감 후 daily run은 `uv run python scripts/run_daily.py --use-staged-intraday --skip-install --persist-oracle-sql` 형태로 호출하면 됩니다.
@@ -202,7 +226,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - same-day staged merge는 intraday metadata 전체를 읽는 것이 아니라, 각 run의 `completed_at` 또는 `started_at` 으로 최신 snapshot을 고른 뒤 `collected-quotes.json` 을 사용합니다.
 - 운영에서는 `output/daily`, `output/intraday`, `output/alerts` 를 screener producer 계정만 쓸 수 있게 두는 것을 권장합니다. consumer는 stable sidecar를 읽기만 하고 내부 artifact/state를 수정하지 않아야 합니다.
 
-## 10. OpenClaw Command Template
+## 11. OpenClaw Command Template
 `SCREENER_INTRADAY_COLLECTOR_COMMAND` 를 쓰면 wrapper가 아래 placeholder를 치환합니다.
 
 - `{python}`
@@ -222,7 +246,7 @@ env PYTHONPATH={project_root}/src {python} -m screener.cli.main collect-window -
 - `env PYTHONPATH={project_root}/src ...` prefix는 cron/OpenClaw 환경에서 `src/` import가 누락되지 않게 하려는 의도입니다.
 - `window_id` 는 스케줄 slot 라벨 검증용이고, 기본 template는 의도적으로 `window-index 0`, `total-windows 1` 로 전체 유니버스를 다시 수집합니다.
 
-## 11. Exit and Failure Handling
+## 12. Exit and Failure Handling
 - 일부 ticker fetch 실패는 metadata에 남기고 run 전체는 계속 진행합니다.
 - daily market data fetch는 provider별 짧은 in-process cache/cooldown과 429 전용 retry/backoff를 적용합니다. `SCREENER_MARKET_DATA_PROVIDER=twelve-data,yfinance`처럼 fallback chain을 쓰면 primary 실패 ticker만 fallback provider에 넘기고 source별 상태를 숨기지 않습니다.
 - Twelve Data가 일일 크레딧 소진(`run out of API credits for the day` 류) 응답을 주면, 해당 slot의 추가 ticker 호출을 즉시 중단하고 이후 planned ticker는 미시도 상태로 metadata에 남깁니다.

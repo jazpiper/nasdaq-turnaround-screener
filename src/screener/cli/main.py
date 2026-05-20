@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from screener.collector import CollectionResult, TwelveDataWindowCollector
 from screener.config import Settings, get_settings
 from screener.models import ScreenRunResult
 from screener.pipeline import ScreenPipeline, build_context
+from screener.recommendations import build_daily_top3_recommendations
 from screener.reporting.assistant_briefing import (
     build_assistant_briefing_markdown,
     build_assistant_briefing_payload,
@@ -171,6 +173,49 @@ def run(
         typer.echo(f"Stable alert entrypoint: {artifacts.stable_alert_events_path}")
     if run_id is not None:
         typer.echo(f"Oracle SQL run id: {run_id}")
+
+
+@app.command("build-daily-top3-recommendations")
+def build_daily_top3_recommendations_command(
+    daily_report_path: Path = typer.Option(
+        Path("output/daily/latest/daily-report.json"),
+        "--daily-report-path",
+        help="Source daily-report.json path.",
+    ),
+    db_path: Path = typer.Option(
+        Path("output/recommendations/recommendations.sqlite3"),
+        "--db-path",
+        help="SQLite recommendation snapshot DB path.",
+    ),
+    output_dir: Path = typer.Option(
+        Path("output/recommendations"),
+        "--output-dir",
+        help="Directory for daily Top 3 recommendation markdown/json artifacts.",
+    ),
+) -> None:
+    try:
+        result = build_daily_top3_recommendations(
+            daily_report_path=daily_report_path,
+            db_path=db_path,
+            output_dir=output_dir,
+        )
+    except FileNotFoundError as exc:
+        typer.echo(f"Daily report not found: {daily_report_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except json.JSONDecodeError as exc:
+        typer.echo(f"Daily report is not valid JSON: {daily_report_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        typer.echo(f"Recommendation artifacts could not be written: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except sqlite3.DatabaseError as exc:
+        typer.echo(f"Recommendation SQLite DB error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Recommendation run id: {result.run_id}")
+    typer.echo(f"Selected recommendations: {result.selected_count}")
+    typer.echo(f"Recommendation JSON: {result.json_path}")
+    typer.echo(f"Recommendation markdown: {result.markdown_path}")
+    typer.echo(f"Recommendation SQLite DB: {db_path}")
 
 
 @app.command("collect-window")
