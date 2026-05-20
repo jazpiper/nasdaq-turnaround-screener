@@ -748,6 +748,19 @@ def _close_return_pct(rows: list[tuple[date, dict[str, Any]]], start_date: date,
     return exit_price, round((exit_price - base) / base * 100, 2)
 
 
+def _resolve_horizon_date(rows: list[tuple[date, dict[str, Any]]], target_date: date, as_of_date: date) -> date | None:
+    """Resolve a calendar D+N target to the next observed market-data date.
+
+    D+1/D+5/D+20/D+60 are calendar checkpoints, but OHLC rows only exist for
+    trading days. When the exact target is a weekend/holiday, settle against the
+    first available row after the target, capped by as_of_date.
+    """
+    for day, _values in rows:
+        if target_date <= day <= as_of_date:
+            return day
+    return None
+
+
 def _first_touch(rows: list[tuple[date, dict[str, Any]]], threshold: float | None, field: str, start_date: date, end_date: date | None = None) -> tuple[int, str | None]:
     if threshold is None:
         return 0, None
@@ -795,16 +808,17 @@ def update_recommendation_outcomes(*, db_path: Path, prices_by_ticker: dict[str,
         ).fetchall()
         for row in rows:
             entry_date = _parse_date(row["entry_date"])
-            horizon_date = entry_date + timedelta(days=int(row["horizon_days"]))
+            target_horizon_date = entry_date + timedelta(days=int(row["horizon_days"]))
             ticker_rows = _price_rows_for_ticker(prices_by_ticker, row["ticker"])
-            horizon_rows = [(day, values) for day, values in ticker_rows if entry_date < day <= horizon_date]
-            if horizon_date > as_of or not any(day == horizon_date for day, _ in ticker_rows):
+            horizon_date = _resolve_horizon_date(ticker_rows, target_horizon_date, as_of)
+            if target_horizon_date > as_of or horizon_date is None:
                 conn.execute(
                     "update recommendation_outcomes set horizon_date = ?, observation_note = ? where outcome_id = ?",
-                    (horizon_date.isoformat(), "insufficient_future_prices", row["outcome_id"]),
+                    (target_horizon_date.isoformat(), "insufficient_future_prices", row["outcome_id"]),
                 )
                 pending += 1
                 continue
+            horizon_rows = [(day, values) for day, values in ticker_rows if entry_date < day <= horizon_date]
             entry_price = _as_float(row["entry_price"])
             buy_limit = _as_float(row["buy_limit_price"]) or entry_price
             fill_day = None

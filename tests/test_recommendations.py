@@ -77,11 +77,11 @@ def _candidate(ticker: str, risk_adjusted: int, score: int, **overrides: object)
     }
 
 
-def _daily_report(candidates: list[dict[str, object]]) -> dict[str, object]:
+def _daily_report(candidates: list[dict[str, object]], *, run_date: str = "2026-05-19") -> dict[str, object]:
     return {
         "schema_version": 1,
-        "date": "2026-05-19",
-        "generated_at": "2026-05-19T20:15:00+00:00",
+        "date": run_date,
+        "generated_at": f"{run_date}T20:15:00+00:00",
         "universe": "NASDAQ-100",
         "planned_ticker_count": 5,
         "successful_ticker_count": 4,
@@ -380,6 +380,39 @@ def test_update_recommendation_outcomes_settles_horizons_and_price_simulation(tm
         "horizon_close",
         0.11,
     )
+
+
+def test_update_recommendation_outcomes_uses_next_available_market_day_for_weekend_horizon(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+    report_path.write_text(
+        json.dumps(_daily_report([_candidate("AAA", 70, 78)], run_date="2026-05-22")),
+        encoding="utf-8",
+    )
+    build_daily_top3_recommendations(daily_report_path=report_path, db_path=db_path, output_dir=output_dir)
+
+    prices = {
+        "AAA": {
+            "2026-05-25": _ohlcv(104.0, high=105.0, low=100.0),
+        },
+        "SPY": {
+            "2026-05-22": _ohlcv(500.0),
+            "2026-05-25": _ohlcv(505.0),
+        },
+        "QQQ": {
+            "2026-05-22": _ohlcv(400.0),
+            "2026-05-25": _ohlcv(404.0),
+        },
+    }
+    result = update_recommendation_outcomes(db_path=db_path, prices_by_ticker=prices, as_of_date="2026-05-25")
+
+    assert result["settled_outcomes"] == 1
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "select horizon_label, horizon_date, outcome_status, exit_price, absolute_return_pct from recommendation_outcomes where horizon_days = 1"
+        ).fetchone()
+    assert row == ("D+1", "2026-05-25", "settled", 104.0, 2.97)
 
 
 def test_update_recommendation_outcomes_marks_no_fill_and_unobservable(tmp_path: Path) -> None:
