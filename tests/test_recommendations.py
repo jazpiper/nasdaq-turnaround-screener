@@ -7,7 +7,7 @@ from typing import Any, cast
 from typer.testing import CliRunner
 
 from screener.cli.main import app
-from screener.recommendations import build_daily_top3_recommendations
+from screener.recommendations import build_daily_top3_recommendations, initialize_recommendation_db
 
 
 def _candidate(ticker: str, risk_adjusted: int, score: int, **overrides: object) -> dict[str, object]:
@@ -127,12 +127,150 @@ def test_build_daily_top3_recommendations_persists_snapshot_and_artifacts(tmp_pa
         assert run[1] == 3
         assert run[2].endswith("daily-top3-recommendations.md")
         assert run[3].endswith("daily-top3-recommendations.json")
-        rows = conn.execute("select rank, ticker, price, risk_adjusted_score from recommendations order by rank").fetchall()
-        assert rows == [(1, "EEE", 100.0, 90.0), (2, "AAA", 100.0, 71.0), (3, "BBB", 100.0, 71.0)]
+        rows = conn.execute(
+            """
+            select rank, ticker, price, reference_price, buy_limit_price,
+                   stop_loss_price, target_sell_price_1, target_sell_price_2,
+                   invalidation_price, risk_reward_ratio, expected_holding_days,
+                   time_stop_date, price_method, price_formula, risk_adjusted_score
+            from recommendations
+            order by rank
+            """
+        ).fetchall()
+        assert rows == [
+            (
+                1,
+                "EEE",
+                100.0,
+                100.0,
+                101.0,
+                92.0,
+                112.0,
+                124.0,
+                92.0,
+                1.5,
+                20,
+                "2026-06-08",
+                "close_based_v1",
+                "reference=latest close; buy_limit=reference*1.01; stop/invalidation=reference*0.92; targets=reference*1.12/1.24; R/R=(target1-reference)/(reference-stop)",
+                90.0,
+            ),
+            (
+                2,
+                "AAA",
+                100.0,
+                100.0,
+                101.0,
+                92.0,
+                112.0,
+                124.0,
+                92.0,
+                1.5,
+                20,
+                "2026-06-08",
+                "close_based_v1",
+                "reference=latest close; buy_limit=reference*1.01; stop/invalidation=reference*0.92; targets=reference*1.12/1.24; R/R=(target1-reference)/(reference-stop)",
+                71.0,
+            ),
+            (
+                3,
+                "BBB",
+                100.0,
+                100.0,
+                101.0,
+                92.0,
+                112.0,
+                124.0,
+                92.0,
+                1.5,
+                20,
+                "2026-06-08",
+                "close_based_v1",
+                "reference=latest close; buy_limit=reference*1.01; stop/invalidation=reference*0.92; targets=reference*1.12/1.24; R/R=(target1-reference)/(reference-stop)",
+                71.0,
+            ),
+        ]
         features = conn.execute("select feature_name from recommendation_features where recommendation_id = 1").fetchall()
         assert ("close",) in features
-        outcomes = conn.execute("select horizon_label, outcome_status from recommendation_outcomes where recommendation_id = 1 order by horizon_days").fetchall()
-        assert outcomes == [("D+1", "pending"), ("D+5", "pending"), ("D+20", "pending"), ("D+60", "pending")]
+        outcomes = conn.execute(
+            "select horizon_label, entry_price, stop_loss_price, target_sell_price_1, invalidation_price, outcome_status from recommendation_outcomes where recommendation_id = 1 order by horizon_days"
+        ).fetchall()
+        assert outcomes == [
+            ("D+1", 100.0, 92.0, 112.0, 92.0, "pending"),
+            ("D+5", 100.0, 92.0, 112.0, 92.0, "pending"),
+            ("D+20", 100.0, 92.0, 112.0, 92.0, "pending"),
+            ("D+60", 100.0, 92.0, 112.0, 92.0, "pending"),
+        ]
+
+    artifact = json.loads(result.json_path.read_text(encoding="utf-8"))
+    first = artifact["recommendations"][0]
+    assert artifact["selection_method"]["pipeline"] == [
+        "universe_filter",
+        "risk_exclusion_gate",
+        "score_components",
+        "diversification_tie_break",
+        "top3_rank",
+    ]
+    assert first["reference_price"] == 100.0
+    assert first["buy_limit_price"] == 101.0
+    assert first["stop_loss_price"] == 92.0
+    assert first["target_sell_price_1"] == 112.0
+    assert first["target_sell_price_2"] == 124.0
+    assert first["invalidation_price"] == 92.0
+    assert first["risk_reward_ratio"] == 1.5
+    assert first["expected_holding_days"] == 20
+    assert first["time_stop_date"] == "2026-06-08"
+    assert first["price_method"] == "close_based_v1"
+    assert first["price_formula"] == "reference=latest close; buy_limit=reference*1.01; stop/invalidation=reference*0.92; targets=reference*1.12/1.24; R/R=(target1-reference)/(reference-stop)"
+    markdown = result.markdown_path.read_text(encoding="utf-8")
+    assert "추천 종목 선정 방식" in markdown
+    assert "**매수가(상한)**: 101.0" in markdown
+    assert "**목표 매도가 1**: 112.0" in markdown
+    assert "**손절/무효화가**: 92.0 / 92.0" in markdown
+
+
+def test_initialize_recommendation_db_migrates_existing_price_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            create table recommendations (
+                recommendation_id integer primary key autoincrement,
+                run_id integer not null,
+                rank integer not null,
+                ticker text not null,
+                price real
+            );
+            create table recommendation_outcomes (
+                outcome_id integer primary key autoincrement,
+                recommendation_id integer not null,
+                horizon_days integer not null,
+                horizon_label text not null,
+                entry_date text not null,
+                entry_price real,
+                outcome_status text not null default 'pending'
+            );
+            """
+        )
+
+    initialize_recommendation_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        recommendation_columns = {row[1] for row in conn.execute("pragma table_info(recommendations)")}
+        outcome_columns = {row[1] for row in conn.execute("pragma table_info(recommendation_outcomes)")}
+    assert {
+        "reference_price",
+        "buy_limit_price",
+        "stop_loss_price",
+        "target_sell_price_1",
+        "target_sell_price_2",
+        "invalidation_price",
+        "risk_reward_ratio",
+        "expected_holding_days",
+        "price_method",
+        "price_formula",
+    } <= recommendation_columns
+    assert {"stop_loss_price", "target_sell_price_1", "target_sell_price_2", "invalidation_price", "price_method"} <= outcome_columns
 
 
 def test_cli_build_daily_top3_recommendations_writes_report(tmp_path: Path) -> None:

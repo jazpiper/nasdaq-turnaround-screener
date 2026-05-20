@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,6 +13,64 @@ SNAPSHOT_SCHEMA_VERSION = 2
 DEFAULT_BENCHMARK_PRIMARY = "SPY"
 DEFAULT_BENCHMARK_SECONDARY = "QQQ"
 OUTCOME_HORIZONS = (1, 5, 20, 60)
+DEFAULT_EXPECTED_HOLDING_DAYS = 20
+PRICE_FORMULA = (
+    "reference=latest close; buy_limit=reference*1.01; stop/invalidation=reference*0.92; "
+    "targets=reference*1.12/1.24; R/R=(target1-reference)/(reference-stop)"
+)
+
+
+def _round_price(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value, 2)
+
+
+def _time_stop_date(run_date: Any, expected_holding_days: int) -> str | None:
+    if run_date is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(run_date)).date()
+    except ValueError:
+        return None
+    return (parsed + timedelta(days=expected_holding_days)).isoformat()
+
+
+def build_price_plan(reference_price: Any, *, run_date: Any = None) -> dict[str, Any]:
+    """Derive immutable advisory buy/sell levels from the recommendation-time reference price."""
+    price = _as_float(reference_price)
+    if price is None or price <= 0:
+        return {
+            "reference_price": price,
+            "buy_limit_price": None,
+            "stop_loss_price": None,
+            "target_sell_price_1": None,
+            "target_sell_price_2": None,
+            "invalidation_price": None,
+            "risk_reward_ratio": None,
+            "expected_holding_days": DEFAULT_EXPECTED_HOLDING_DAYS,
+            "time_stop_date": _time_stop_date(run_date, DEFAULT_EXPECTED_HOLDING_DAYS),
+            "price_method": "close_based_v1",
+            "price_formula": PRICE_FORMULA,
+        }
+    stop = _round_price(price * 0.92)
+    target1 = _round_price(price * 1.12)
+    risk_reward_ratio = None
+    if stop is not None and target1 is not None and price > stop:
+        risk_reward_ratio = round((target1 - price) / (price - stop), 2)
+    return {
+        "reference_price": _round_price(price),
+        "buy_limit_price": _round_price(price * 1.01),
+        "stop_loss_price": stop,
+        "target_sell_price_1": target1,
+        "target_sell_price_2": _round_price(price * 1.24),
+        "invalidation_price": stop,
+        "risk_reward_ratio": risk_reward_ratio,
+        "expected_holding_days": DEFAULT_EXPECTED_HOLDING_DAYS,
+        "time_stop_date": _time_stop_date(run_date, DEFAULT_EXPECTED_HOLDING_DAYS),
+        "price_method": "close_based_v1",
+        "price_formula": PRICE_FORMULA,
+    }
 
 
 @dataclass(frozen=True)
@@ -87,6 +145,17 @@ def initialize_recommendation_db(db_path: Path) -> None:
                 sector text,
                 industry text,
                 price real,
+                reference_price real,
+                buy_limit_price real,
+                stop_loss_price real,
+                target_sell_price_1 real,
+                target_sell_price_2 real,
+                invalidation_price real,
+                risk_reward_ratio real,
+                expected_holding_days integer,
+                time_stop_date text,
+                price_method text,
+                price_formula text,
                 close_timestamp text,
                 currency text not null default 'USD',
                 algorithm_version text not null,
@@ -129,6 +198,11 @@ def initialize_recommendation_db(db_path: Path) -> None:
                 entry_date text not null,
                 horizon_date text,
                 entry_price real,
+                stop_loss_price real,
+                target_sell_price_1 real,
+                target_sell_price_2 real,
+                invalidation_price real,
+                price_method text,
                 exit_price real,
                 absolute_return real,
                 absolute_return_pct real,
@@ -144,6 +218,7 @@ def initialize_recommendation_db(db_path: Path) -> None:
             );
             """
         )
+        _ensure_recommendation_columns(conn)
         conn.execute(
             """
             insert or ignore into algorithm_versions (
@@ -159,6 +234,38 @@ def initialize_recommendation_db(db_path: Path) -> None:
                 _iso_now(),
             ),
         )
+
+
+def _ensure_recommendation_columns(conn: sqlite3.Connection) -> None:
+    tables = {row[0] for row in conn.execute("select name from sqlite_master where type = 'table'")}
+    if "recommendations" in tables:
+        existing = {row[1] for row in conn.execute("pragma table_info(recommendations)")}
+        for name, ddl in {
+            "reference_price": "real",
+            "buy_limit_price": "real",
+            "stop_loss_price": "real",
+            "target_sell_price_1": "real",
+            "target_sell_price_2": "real",
+            "invalidation_price": "real",
+            "risk_reward_ratio": "real",
+            "expected_holding_days": "integer",
+            "time_stop_date": "text",
+            "price_method": "text",
+            "price_formula": "text",
+        }.items():
+            if name not in existing:
+                conn.execute(f"alter table recommendations add column {name} {ddl}")
+    if "recommendation_outcomes" in tables:
+        existing = {row[1] for row in conn.execute("pragma table_info(recommendation_outcomes)")}
+        for name, ddl in {
+            "stop_loss_price": "real",
+            "target_sell_price_1": "real",
+            "target_sell_price_2": "real",
+            "invalidation_price": "real",
+            "price_method": "text",
+        }.items():
+            if name not in existing:
+                conn.execute(f"alter table recommendation_outcomes add column {name} {ddl}")
 
 
 def _candidate_snapshot(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -202,7 +309,12 @@ def select_top3_candidates(daily_report: dict[str, Any], limit: int = 3) -> tupl
     return eligible[:limit], excluded
 
 
-def _recommendation_payload_item(candidate: dict[str, Any], rank: int, run_id: int | None = None) -> dict[str, Any]:
+def _recommendation_payload_item(
+    candidate: dict[str, Any],
+    rank: int,
+    run_id: int | None = None,
+    run_date: Any = None,
+) -> dict[str, Any]:
     snapshot = _candidate_snapshot(candidate)
     raw_subscores = candidate.get("subscores")
     subscores: dict[str, Any] = dict(raw_subscores) if isinstance(raw_subscores, dict) else {}
@@ -225,6 +337,8 @@ def _recommendation_payload_item(candidate: dict[str, Any], rank: int, run_id: i
         "rel_strength_60d_vs_qqq": snapshot.get("rel_strength_60d_vs_qqq"),
         "market_context_score": snapshot.get("market_context_score"),
     }
+    price = candidate.get("close") or snapshot.get("close")
+    price_plan = build_price_plan(price, run_date=run_date)
     return {
         "run_id": run_id,
         "rank": rank,
@@ -232,7 +346,8 @@ def _recommendation_payload_item(candidate: dict[str, Any], rank: int, run_id: i
         "company_name": candidate.get("name"),
         "sector": snapshot.get("sector") or candidate.get("sector"),
         "industry": snapshot.get("industry") or candidate.get("industry"),
-        "price": candidate.get("close") or snapshot.get("close"),
+        "price": price,
+        **price_plan,
         "close_timestamp": snapshot.get("source_timestamp") or candidate.get("generated_at"),
         "currency": snapshot.get("currency", "USD"),
         "algorithm_version": ALGORITHM_VERSION,
@@ -266,7 +381,11 @@ def _recommendation_payload_item(candidate: dict[str, Any], rank: int, run_id: i
 
 def build_daily_top3_payload(daily_report: dict[str, Any], *, run_id: int | None = None) -> dict[str, Any]:
     selected, excluded = select_top3_candidates(daily_report)
-    recommendations = [_recommendation_payload_item(candidate, rank=index + 1, run_id=run_id) for index, candidate in enumerate(selected)]
+    run_date = daily_report.get("date")
+    recommendations = [
+        _recommendation_payload_item(candidate, rank=index + 1, run_id=run_id, run_date=run_date)
+        for index, candidate in enumerate(selected)
+    ]
     notes: list[str] = []
     if len(recommendations) < 3:
         notes.append(f"eligible 후보가 {len(recommendations)}개라 Top 3보다 적게 생성됨")
@@ -277,11 +396,28 @@ def build_daily_top3_payload(daily_report: dict[str, Any], *, run_id: int | None
         "source": "nasdaq-turnaround-screener",
         "algorithm_version": ALGORITHM_VERSION,
         "run_id": run_id,
-        "run_date": daily_report.get("date"),
+        "run_date": run_date,
         "generated_at": _iso_now(),
         "universe_name": daily_report.get("universe", "NASDAQ-100"),
         "benchmark_primary": DEFAULT_BENCHMARK_PRIMARY,
         "benchmark_secondary": DEFAULT_BENCHMARK_SECONDARY,
+        "selection_method": {
+            "pipeline": ["universe_filter", "risk_exclusion_gate", "score_components", "diversification_tie_break", "top3_rank"],
+            "universe_filter": "Use the daily report universe after data collection coverage/freshness checks.",
+            "risk_exclusion_gate": "Exclude imminent earnings <=3 calendar days, severe weekly trend damage, and missing risk_adjusted_score.",
+            "score_components": [
+                "relative momentum/trend via market_context and QQQ relative strength",
+                "technical setup via oversold, bottom_context, and reversal subscores",
+                "volume confirmation via volume subscore and volume_ratio_20d snapshot",
+                "quality/fundamental proxy via reliability, earnings distance, and data-quality labels",
+                "valuation sanity proxy via bottom-distance/Bollinger context in snapshot",
+                "catalyst/news proxy via earnings timing and rationale fields",
+                "liquidity/volatility risk via volume, ATR/range, and risk penalties",
+            ],
+            "ranking": "Sort by risk_adjusted_score desc, final_score desc, ticker asc.",
+            "diversification_tie_break": "Ticker ascending is the deterministic tie-break for equal scores; no sector cap is applied in MVP.",
+            "top3": "Take the first three eligible candidates after gates and ordering.",
+        },
         "planned_ticker_count": int(daily_report.get("planned_ticker_count") or 0),
         "successful_ticker_count": int(daily_report.get("successful_ticker_count") or 0),
         "eligible_candidate_count": len(selected) + max(0, len(daily_report.get("candidates", [])) - len(excluded) - len(selected)),
@@ -319,7 +455,11 @@ def build_daily_top3_markdown(payload: dict[str, Any], *, persisted: bool) -> st
         lines.extend(
             [
                 f"**{item['rank']}) {item['ticker']}** {item.get('company_name') or ''}".rstrip(),
-                f"- **가격**: {item.get('price')}",
+                f"- **기준가**: {item.get('reference_price')}",
+                f"- **매수가(상한)**: {item.get('buy_limit_price')}",
+                f"- **목표 매도가 1**: {item.get('target_sell_price_1')} / **목표 매도가 2**: {item.get('target_sell_price_2')}",
+                f"- **손절/무효화가**: {item.get('stop_loss_price')} / {item.get('invalidation_price')}",
+                f"- **R/R·기간·산식**: {item.get('risk_reward_ratio')} / {item.get('expected_holding_days')}일 / {item.get('price_method')}",
                 f"- **점수**: {item.get('final_score')} / risk-adjusted {item.get('risk_adjusted_score')}",
                 f"- **왜 뽑혔나**: {'; '.join(str(reason) for reason in reasons[:2])}",
                 f"- **주의**: {'; '.join(str(risk) for risk in risks[:2])}",
@@ -330,7 +470,9 @@ def build_daily_top3_markdown(payload: dict[str, Any], *, persisted: bool) -> st
         )
     lines.extend(
         [
-            "## 왜 이 3개인가",
+            "## 추천 종목 선정 방식",
+            "- universe filter → risk/exclusion gate → score components → diversification/tie-break → Top3 순서로 선정합니다.",
+            "- score components: relative momentum/trend, technical setup, volume confirmation, quality/fundamental proxy, valuation sanity, catalyst/news, liquidity/volatility risk.",
             f"- risk_adjusted_score → final_score → ticker 순으로 정렬한 상위 {payload.get('selected_candidate_count')}개입니다.",
             f"- universe={payload.get('universe_name')}, benchmark={payload.get('benchmark_primary')}/{payload.get('benchmark_secondary')}.",
             "",
@@ -393,13 +535,15 @@ def _insert_recommendations(conn: sqlite3.Connection, payload: dict[str, Any], r
         cursor = conn.execute(
             """
             insert into recommendations (
-                run_id, rank, ticker, company_name, sector, industry, price, close_timestamp, currency,
+                run_id, rank, ticker, company_name, sector, industry, price, reference_price, buy_limit_price,
+                stop_loss_price, target_sell_price_1, target_sell_price_2, invalidation_price, risk_reward_ratio,
+                expected_holding_days, time_stop_date, price_method, price_formula, close_timestamp, currency,
                 algorithm_version, final_score, risk_adjusted_score, score_schema_version, snapshot_schema_version,
                 subscore_oversold, subscore_bottom_context, subscore_reversal, subscore_volume, subscore_market_context,
                 earnings_penalty, volatility_penalty, severe_weekly_penalty, risk_adjustment_penalty,
                 rationale_json, risk_flags_json, tier_reasons_json, source_freshness_json, data_quality_json,
                 benchmark_context_json, snapshot_json, generated_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 run_id,
@@ -409,6 +553,17 @@ def _insert_recommendations(conn: sqlite3.Connection, payload: dict[str, Any], r
                 item.get("sector"),
                 item.get("industry"),
                 _as_float(item.get("price")),
+                _as_float(item.get("reference_price")),
+                _as_float(item.get("buy_limit_price")),
+                _as_float(item.get("stop_loss_price")),
+                _as_float(item.get("target_sell_price_1")),
+                _as_float(item.get("target_sell_price_2")),
+                _as_float(item.get("invalidation_price")),
+                _as_float(item.get("risk_reward_ratio")),
+                int(item["expected_holding_days"]) if item.get("expected_holding_days") is not None else None,
+                item.get("time_stop_date"),
+                item.get("price_method"),
+                item.get("price_formula"),
                 item.get("close_timestamp"),
                 item.get("currency", "USD"),
                 item["algorithm_version"],
@@ -445,10 +600,22 @@ def _insert_recommendations(conn: sqlite3.Connection, payload: dict[str, Any], r
             conn.execute(
                 """
                 insert into recommendation_outcomes (
-                    recommendation_id, horizon_days, horizon_label, entry_date, entry_price, outcome_status
-                ) values (?, ?, ?, ?, ?, 'pending')
+                    recommendation_id, horizon_days, horizon_label, entry_date, entry_price, stop_loss_price,
+                    target_sell_price_1, target_sell_price_2, invalidation_price, price_method, outcome_status
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
                 """,
-                (recommendation_id, horizon, f"D+{horizon}", payload["run_date"], _as_float(item.get("price"))),
+                (
+                    recommendation_id,
+                    horizon,
+                    f"D+{horizon}",
+                    payload["run_date"],
+                    _as_float(item.get("reference_price")),
+                    _as_float(item.get("stop_loss_price")),
+                    _as_float(item.get("target_sell_price_1")),
+                    _as_float(item.get("target_sell_price_2")),
+                    _as_float(item.get("invalidation_price")),
+                    item.get("price_method"),
+                ),
             )
 
 

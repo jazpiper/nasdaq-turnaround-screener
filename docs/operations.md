@@ -93,6 +93,10 @@ uv run python -m screener.cli.main build-daily-top3-recommendations \
 - 출력은 `output/recommendations/<NY_DATE>/daily-top3-recommendations.json` 및 `.md` 입니다. Markdown은 Telegram cron/LLM consumer가 바로 읽기 쉽게 Top 3, 왜 이 3개인가, 주의점, DB 반영 상태 섹션을 포함합니다.
 - SQLite DB 기본 경로는 `output/recommendations/recommendations.sqlite3` 입니다. 테이블은 `algorithm_versions`, `recommendation_runs`, `recommendations`, `recommendation_features`, `recommendation_outcomes` 입니다.
 - 추천 snapshot은 선정 시점 가격, score/subscore/penalty, rationale, risk flags, data quality, source freshness, SPY/QQQ benchmark context, 원본 feature snapshot을 저장합니다.
+- 종목 선정 방식은 `selection_method`에 고정 기록됩니다: universe filter → risk/exclusion gate → score components → diversification/tie-break → Top3. Score components는 relative momentum/trend, technical setup, volume confirmation, quality/fundamental proxy, valuation sanity, catalyst/news, liquidity/volatility risk를 포함합니다.
+- 추천별 가격 필드는 `reference_price`, `buy_limit_price`, `stop_loss_price`, `target_sell_price_1`, optional `target_sell_price_2`, `invalidation_price`, `risk_reward_ratio`, `expected_holding_days`, `time_stop_date`, `price_method`, `price_formula`입니다. 현재 `close_based_v1` 산식은 최신 종가를 기준가로 쓰고 매수상한=기준가*1.01, 손절/무효화=기준가*0.92, 목표1/2=기준가*1.12/1.24, R/R=(목표1-기준가)/(기준가-손절)입니다.
+- Markdown은 각 Top3 항목에 기준가, 매수가(상한), 목표 매도가 1/2, 손절/무효화가, R/R·기간·산식을 눈에 띄게 표시합니다.
+- SQLite `recommendations`와 `recommendation_outcomes`는 위 가격 필드를 함께 저장해 outcome tracking이 추천 당시 immutable snapshot과 이후 실제 OHLC를 비교할 수 있게 합니다.
 - outcome row는 D+1/D+5/D+20/D+60을 `pending`으로 생성합니다. 사후 settlement 계산은 별도 후속 기능이며 현재 명령은 selection snapshot만 저장합니다.
 - hard gate는 임박 실적(3일 이내), 심한 주봉 훼손, risk-adjusted score 누락을 제외합니다. 정렬은 `risk_adjusted_score desc`, `final_score desc`, `ticker asc` 입니다.
 - 이 명령은 advisory artifact만 만들며 자동매수, 주문, 브로커 API 호출을 절대 수행하지 않습니다.
