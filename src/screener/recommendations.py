@@ -172,7 +172,7 @@ def _hard_gate_reason(candidate: dict[str, Any]) -> str | None:
         return "weekly_trend_severe_damage"
     days_to_earnings = snapshot.get("days_to_next_earnings")
     days_to_earnings_float = _as_float(days_to_earnings)
-    if days_to_earnings_float is not None and int(days_to_earnings_float) <= 3:
+    if days_to_earnings_float is not None and days_to_earnings_float <= 3.0:
         return "earnings_imminent"
     if _as_float(candidate.get("risk_adjusted_score")) is None:
         return "missing_risk_adjusted_score"

@@ -97,6 +97,7 @@ def test_build_daily_top3_recommendations_persists_snapshot_and_artifacts(tmp_pa
                 [
                     _candidate("BBB", 71, 80),
                     _candidate("AAA", 71, 80),
+                    _candidate("EEE", 90, 90, indicator_snapshot={"days_to_next_earnings": 3.9}),
                     _candidate("CCC", 69, 78),
                     _candidate("DDD", 65, 75, indicator_snapshot={"days_to_next_earnings": 2}),
                 ]
@@ -113,7 +114,7 @@ def test_build_daily_top3_recommendations_persists_snapshot_and_artifacts(tmp_pa
     )
 
     assert result.run_id == 1
-    assert [item["ticker"] for item in result.payload["recommendations"]] == ["AAA", "BBB", "CCC"]
+    assert [item["ticker"] for item in result.payload["recommendations"]] == ["EEE", "AAA", "BBB"]
     assert result.json_path.exists()
     assert result.markdown_path.exists()
     assert "사면 안 되는 이유/주의점" in result.markdown_path.read_text(encoding="utf-8")
@@ -127,7 +128,7 @@ def test_build_daily_top3_recommendations_persists_snapshot_and_artifacts(tmp_pa
         assert run[2].endswith("daily-top3-recommendations.md")
         assert run[3].endswith("daily-top3-recommendations.json")
         rows = conn.execute("select rank, ticker, price, risk_adjusted_score from recommendations order by rank").fetchall()
-        assert rows == [(1, "AAA", 100.0, 71.0), (2, "BBB", 100.0, 71.0), (3, "CCC", 100.0, 69.0)]
+        assert rows == [(1, "EEE", 100.0, 90.0), (2, "AAA", 100.0, 71.0), (3, "BBB", 100.0, 71.0)]
         features = conn.execute("select feature_name from recommendation_features where recommendation_id = 1").fetchall()
         assert ("close",) in features
         outcomes = conn.execute("select horizon_label, outcome_status from recommendation_outcomes where recommendation_id = 1 order by horizon_days").fetchall()
