@@ -27,13 +27,19 @@ uv run python scripts/run_daily.py --date 2026-04-21 --use-staged-intraday --ski
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --universe-name user-watchlist --tickers TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --overlay-file config/hot-sector-overlay.txt --overlay-name hot-sector
 uv run python scripts/run_daily.py --date 2026-05-01 --skip-install --tickers TSLA,NVDA --assistant-artifact-basename latest-user-watchlist-screener
+uv run python scripts/build_nasdaq_expanded_tickers.py --limit 500 --output config/nasdaq-expanded-500.txt
+uv run python scripts/run_daily.py --date ny-today --skip-install --universe-name nasdaq-expanded-500 --tickers-file config/nasdaq-expanded-500.txt --output-root output/daily-nasdaq-expanded-500 --skip-assistant-briefing
+uv run python scripts/run_nasdaq_expanded_discovery.py --date ny-today --skip-install
 ```
 
 daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-MM-DD/` 출력, `output/daily/latest` 갱신까지 처리합니다.
 운영 wrapper의 `--date` 기본값은 현재 `America/New_York` 날짜입니다. `--date`를 생략하거나 `--date auto`/`--date ny-today`를 주면 UTC/KST 스케줄러에서도 NY 기준 날짜를 사용합니다. 명시적 `YYYY-MM-DD` 값은 그대로 보존됩니다.
 - `run` CLI는 stdout에 `Run universe: ...` 및 `Data quality: nonempty=..., latest_date_mismatch=..., insufficient_history=...` 요약을 함께 출력합니다.
-- `--tickers`/`--universe-tickers`를 명시하면 custom universe가 활성화되고 기본 이름은 `user-watchlist` 입니다. `--universe-name`으로 artifact metadata의 universe 이름을 바꿀 수 있으며, 이 옵션은 custom ticker list와 함께만 허용됩니다.
+- `--tickers`/`--universe-tickers`를 명시하면 custom universe가 활성화되고 기본 이름은 `user-watchlist` 입니다. `--tickers-file`은 JSON/CSV/newline-separated ticker file을 읽어 같은 custom universe 경로로 실행합니다. `--universe-name`으로 artifact metadata의 universe 이름을 바꿀 수 있으며, 이 옵션은 custom ticker list/file과 함께만 허용됩니다.
 - ticker list는 comma-separated 입력을 trim/uppercase/`.`→`-` 정규화하고 중복을 순서 보존으로 제거합니다. 옵션을 주지 않으면 기존 NASDAQ-100 기본 동작과 output schema가 유지됩니다.
+- `scripts/build_nasdaq_expanded_tickers.py`는 NASDAQ Trader `nasdaqlisted.txt`에서 test issue/ETF와 obvious warrant/unit/right/preferred/note instrument를 제외한 deterministic 후보 파일을 만듭니다. 기본 산출물은 `config/nasdaq-expanded-500.txt`입니다.
+- `scripts/run_nasdaq_expanded_discovery.py`는 확장 universe 관찰용 sidecar입니다. daily 산출물은 `output/daily-nasdaq-expanded-500`, Top3 산출물/SQLite DB는 `output/recommendations-expanded`를 사용해 기존 `output/daily/latest` 및 `output/recommendations/recommendations.sqlite3` baseline과 섞지 않습니다. 이 lane은 discovery/성과비교용이며 자동매수 또는 production threshold 변경을 하지 않습니다.
+- expanded-500 lane은 broad discovery가 paid/API-key provider quota를 소모하지 않도록 기본 provider를 `yfinance`로 고정합니다. yfinance/Yahoo는 안정적인 공개 일일 quota를 제공하지 않으므로, repo 내부에서는 “외부 quota 추정” 대신 자체 hard cap을 둡니다. 기본값은 `SCREENER_YFINANCE_BATCH_SIZE=1`, `SCREENER_YFINANCE_BATCH_PAUSE_SECONDS=1`, `SCREENER_YFINANCE_THREADS=false`, `SCREENER_YFINANCE_DAILY_REQUEST_CAP=750`, `SCREENER_YFINANCE_QUOTA_STATE_PATH=output/.quota/yfinance-shared.json`입니다. `scripts/run_daily.py`도 같은 shared ledger 기본값을 적용하므로 baseline NASDAQ-100 daily run이 실제로 yfinance까지 fallback하면 같은 cap에 포함됩니다. 같은 UTC 날짜에 cap을 초과할 경우 추가 Yahoo 호출은 수행하지 않고 해당 ticker를 skipped 처리합니다. 안정 실행이 확인되면 cap을 `1000 → 1500 → 2000` 순서로 올립니다.
 - `--overlay-tickers` 또는 `--overlay-file`은 기본 NASDAQ-100/custom universe에 hot-sector overlay ticker를 추가합니다. overlay file은 JSON/CSV/newline-separated text를 지원하고, `--overlay-name`은 output root suffix와 artifact metadata label에 쓰입니다.
 - `scripts/run_daily.py`는 custom tickers 또는 overlay와 기본 `--output-root` 생략 조합에서 root를 `output/daily-user-watchlist`, `output/daily-user-watchlist-hot-sector`처럼 universe/overlay별로 분리해 `output/daily/latest`와 alert-state 간섭을 피합니다. 명시적으로 같은 `--output-root`를 주면 그 값을 따릅니다.
 - custom ticker daily run은 성공 시 `output/assistant/latest-user-briefing-screener.{json,md}`도 함께 생성해 holdings/watchlist/big-tech용 compact briefing을 자동으로 갱신합니다.

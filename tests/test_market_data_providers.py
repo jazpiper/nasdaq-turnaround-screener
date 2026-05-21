@@ -44,6 +44,11 @@ class MarketDataProviderTests(unittest.TestCase):
             "FMP_API_KEY",
             "FINANCIAL_MODELING_PREP_API_KEY",
             "SCREENER_FMP_API_KEY",
+            "SCREENER_YFINANCE_BATCH_SIZE",
+            "SCREENER_YFINANCE_BATCH_PAUSE_SECONDS",
+            "SCREENER_YFINANCE_THREADS",
+            "SCREENER_YFINANCE_DAILY_REQUEST_CAP",
+            "SCREENER_YFINANCE_QUOTA_STATE_PATH",
         ):
             os.environ.pop(key, None)
 
@@ -473,6 +478,96 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(result.failed_tickers, {})
         self.assertEqual(len(result.bars_by_ticker["QQQ"]), 2)
         self.assertEqual(result.bars_by_ticker["QQQ"][-1].close, 506.0)
+
+    def test_yfinance_fetcher_chunks_large_requests_and_serializes_threads(self):
+        calls: list[dict[str, object]] = []
+
+        def frame_for(tickers: list[str]) -> pd.DataFrame:
+            index = pd.Index([pd.Timestamp("2026-04-21")], name="Date")
+            columns = pd.MultiIndex.from_product(
+                [tickers, ["Open", "High", "Low", "Close", "Adj Close", "Volume"]],
+                names=["Ticker", "Price"],
+            )
+            values = []
+            for offset, _ticker in enumerate(tickers):
+                values.extend([100 + offset, 101 + offset, 99 + offset, 100.5 + offset, 100.5 + offset, 1_000_000 + offset])
+            return pd.DataFrame([values], index=index, columns=columns)
+
+        class FakeYFinance:
+            @staticmethod
+            def download(**kwargs):
+                calls.append(kwargs)
+                return frame_for(list(kwargs["tickers"]))
+
+        original_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = FakeYFinance()
+        try:
+            sleeps: list[float] = []
+            fetcher = YFinanceDailyBarFetcher(batch_size=2, batch_pause_seconds=0.5, threads=False, sleeper=sleeps.append)
+            result = fetcher.fetch(["AAA", "BBB", "CCC", "DDD", "EEE"])
+        finally:
+            if original_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = original_module
+
+        self.assertEqual([call["tickers"] for call in calls], [["AAA", "BBB"], ["CCC", "DDD"], ["EEE"]])
+        self.assertTrue(all(call["threads"] is False for call in calls))
+        self.assertEqual(sleeps, [0.5, 0.5])
+        self.assertEqual(result.failed_tickers, {})
+        self.assertEqual(set(result.bars_by_ticker), {"AAA", "BBB", "CCC", "DDD", "EEE"})
+
+    def test_build_market_data_fetcher_reads_yfinance_throttle_env(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quota_path = Path(tmp_dir) / "quota.json"
+            os.environ["SCREENER_YFINANCE_BATCH_SIZE"] = "80"
+            os.environ["SCREENER_YFINANCE_BATCH_PAUSE_SECONDS"] = "2"
+            os.environ["SCREENER_YFINANCE_THREADS"] = "false"
+            os.environ["SCREENER_YFINANCE_DAILY_REQUEST_CAP"] = "500"
+            os.environ["SCREENER_YFINANCE_QUOTA_STATE_PATH"] = str(quota_path)
+
+            fetcher = build_market_data_fetcher("yfinance")
+
+        self.assertIsInstance(fetcher, YFinanceDailyBarFetcher)
+        self.assertEqual(fetcher.batch_size, 80)
+        self.assertEqual(fetcher.batch_pause_seconds, 2.0)
+        self.assertFalse(fetcher.threads)
+        self.assertEqual(fetcher.daily_request_cap, 500)
+        self.assertEqual(fetcher.quota_state_path, quota_path)
+
+    def test_yfinance_fetcher_enforces_daily_request_cap_before_download(self):
+        calls: list[dict[str, object]] = []
+
+        def frame_for(tickers: list[str]) -> pd.DataFrame:
+            index = pd.Index([pd.Timestamp("2026-04-21")], name="Date")
+            columns = pd.MultiIndex.from_product(
+                [tickers, ["Open", "High", "Low", "Close", "Adj Close", "Volume"]],
+                names=["Ticker", "Price"],
+            )
+            return pd.DataFrame([[100, 101, 99, 100.5, 100.5, 1_000_000]], index=index, columns=columns)
+
+        class FakeYFinance:
+            @staticmethod
+            def download(**kwargs):
+                calls.append(kwargs)
+                return frame_for(list(kwargs["tickers"]))
+
+        original_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = FakeYFinance()
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                quota_path = Path(tmp_dir) / "quota.json"
+                fetcher = YFinanceDailyBarFetcher(batch_size=1, daily_request_cap=1, quota_state_path=quota_path)
+                result = fetcher.fetch(["AAA", "BBB"])
+        finally:
+            if original_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = original_module
+
+        self.assertEqual([call["tickers"] for call in calls], [["AAA"]])
+        self.assertIn("AAA", result.bars_by_ticker)
+        self.assertEqual(result.failed_tickers, {"BBB": "Skipped: yfinance daily request cap would be exceeded"})
 
     def test_load_openclaw_secrets_reads_nested_values(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

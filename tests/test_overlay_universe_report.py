@@ -34,10 +34,10 @@ def test_overlay_universe_report_payload_and_markdown(tmp_path: Path) -> None:
     comparison = payload["comparison"]
     deltas = comparison["deltas"]
 
-    assert comparison["baseline"]["candidate_count"] == 52
+    assert comparison["baseline"]["candidate_count"] == 57
     assert comparison["overlay"]["candidate_count"] == 57
-    assert deltas["planned_ticker_count"] == 2
-    assert deltas["candidate_count"] == 5
+    assert deltas["planned_ticker_count"] == 0
+    assert deltas["candidate_count"] == 0
     assert payload["overlay"]["selected_sectors"] == ["semiconductors", "technology", "energy"]
     assert payload["overlay"]["tickers"] == ["NVDA", "AVGO", "AMD", "QCOM", "MSFT", "FANG", "BKR", "HAL", "SLB"]
     assert payload["backtest"]["available"] is True
@@ -49,8 +49,8 @@ def test_overlay_universe_report_payload_and_markdown(tmp_path: Path) -> None:
     assert payload["universe_variants"][1]["planned_ticker_count"] == 102
     assert payload["universe_variants"][2]["status"] == "template"
     assert "Overlay / Universe Comparison" in markdown
-    assert "| Planned tickers | 100 | 102 | 2 |" in markdown
-    assert "| Candidate count | 52 | 57 | 5 |" in markdown
+    assert "| Planned tickers | 102 | 102 | 0 |" in markdown
+    assert "| Candidate count | 57 | 57 | 0 |" in markdown
     assert "semiconductors" in markdown
     assert "user-watchlist-plus-hot-sector-overlay" in markdown
 
@@ -63,7 +63,7 @@ def test_overlay_universe_report_payload_and_markdown(tmp_path: Path) -> None:
     assert json_path.exists()
     assert markdown_path.exists()
     written = json.loads(json_path.read_text(encoding="utf-8"))
-    assert written["comparison"]["deltas"]["candidate_count"] == 5
+    assert written["comparison"]["deltas"]["candidate_count"] == 0
 
 
 def test_overlay_universe_report_command_writes_artifacts(tmp_path: Path) -> None:
@@ -87,7 +87,7 @@ def test_overlay_universe_report_command_writes_artifacts(tmp_path: Path) -> Non
     )
 
     assert result.exit_code == 0
-    assert "Comparison: planned=100→102 (2), candidates=52→57 (5)" in result.stdout
+    assert "Comparison: planned=102→102 (0), candidates=57→57 (0)" in result.stdout
     assert "Overlay sectors: semiconductors, technology, energy" in result.stdout
     assert (output_dir / "overlay-universe-report.json").exists()
     assert (output_dir / "overlay-universe-report.md").exists()

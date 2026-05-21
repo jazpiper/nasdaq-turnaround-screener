@@ -22,6 +22,8 @@ from screener.dates import resolve_ny_run_date
 DEFAULT_OUTPUT_ROOT = Path("output/daily")
 DEFAULT_CUSTOM_UNIVERSE_NAME = "user-watchlist"
 DEFAULT_ASSISTANT_USER_TICKERS = "TSLA,INFQ,PLTR,RKLB,GOOGL,NVDA"
+DEFAULT_YFINANCE_DAILY_REQUEST_CAP = "750"
+DEFAULT_YFINANCE_QUOTA_STATE_PATH = PROJECT_ROOT / "output" / ".quota" / "yfinance-shared.json"
 LATEST_NAME = "latest"
 DEFAULT_CRON_DELAY_WARNING_SECONDS = 15 * 60
 
@@ -55,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--persist-oracle-sql", action="store_true", help="Write successful daily run results to Oracle SQL.")
     parser.add_argument("--universe-name", default=None, help="Name to record for a custom ticker universe.")
     parser.add_argument("--tickers", "--universe-tickers", dest="universe_tickers", default=None, help="Comma-separated tickers for a custom screener universe.")
+    parser.add_argument("--tickers-file", type=Path, default=None, help="File containing custom universe tickers; JSON, CSV, or newline-separated text.")
     parser.add_argument("--overlay-tickers", default=None, help="Comma-separated hot-sector overlay tickers to append to the core universe.")
     parser.add_argument("--overlay-file", type=Path, default=None, help="File containing overlay tickers as JSON, CSV, or newline-separated text.")
     parser.add_argument("--overlay-name", default=None, help="Label used when naming outputs for an overlay-backed universe.")
@@ -84,6 +87,12 @@ def parse_args() -> argparse.Namespace:
 
 def project_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def configure_shared_yfinance_quota() -> None:
+    """Apply shared yfinance quota defaults for every daily screener lane."""
+    os.environ.setdefault("SCREENER_YFINANCE_DAILY_REQUEST_CAP", DEFAULT_YFINANCE_DAILY_REQUEST_CAP)
+    os.environ.setdefault("SCREENER_YFINANCE_QUOTA_STATE_PATH", str(DEFAULT_YFINANCE_QUOTA_STATE_PATH))
 
 
 def venv_python(root: Path) -> Path:
@@ -144,6 +153,12 @@ def _safe_output_root_suffix(value: str) -> str:
     normalized = "".join(character.lower() if character.isalnum() else "-" for character in value.strip())
     collapsed = "-".join(part for part in normalized.split("-") if part)
     return collapsed or DEFAULT_CUSTOM_UNIVERSE_NAME
+
+
+def load_universe_tickers_file(path: Path) -> str:
+    from screener.universe import load_ticker_source_file
+
+    return ",".join(load_ticker_source_file(path))
 
 
 def resolve_assistant_user_tickers(*, universe_tickers: str | None, assistant_user_tickers: str | None) -> str:
@@ -352,13 +367,24 @@ def run_assistant_briefing(
 
 def main() -> int:
     args = parse_args()
+    configure_shared_yfinance_quota()
     root = project_root()
+    if args.universe_tickers is not None and args.tickers_file is not None:
+        print("--tickers-file cannot be combined with --tickers/--universe-tickers", file=sys.stderr)
+        return 2
+    universe_tickers = args.universe_tickers
+    if args.tickers_file is not None:
+        try:
+            universe_tickers = load_universe_tickers_file(args.tickers_file)
+        except (OSError, ValueError) as exc:
+            print(f"Ticker file error: {exc}", file=sys.stderr)
+            return 2
     output_root = (
         root
         / resolve_output_root(
             args.output_root,
             universe_name=args.universe_name,
-            universe_tickers=args.universe_tickers,
+            universe_tickers=universe_tickers,
             overlay_tickers=args.overlay_tickers,
             overlay_file=args.overlay_file,
             overlay_name=args.overlay_name,
@@ -379,7 +405,7 @@ def main() -> int:
         args.intraday_output_root,
         args.persist_oracle_sql,
         args.universe_name,
-        args.universe_tickers,
+        universe_tickers,
         args.overlay_tickers,
         args.overlay_file,
         args.overlay_name,
@@ -411,7 +437,7 @@ def main() -> int:
             output_dir / "daily-report.json",
             (root / args.assistant_output_dir).resolve(),
             resolve_assistant_user_tickers(
-                universe_tickers=args.universe_tickers,
+                universe_tickers=universe_tickers,
                 assistant_user_tickers=args.assistant_user_tickers,
             ),
             artifact_basename=args.assistant_artifact_basename,

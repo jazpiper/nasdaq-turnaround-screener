@@ -11,6 +11,7 @@ from scripts.run_daily import (
     DEFAULT_OUTPUT_ROOT,
     LATEST_NAME,
     dated_output_dir,
+    load_universe_tickers_file,
     resolve_assistant_user_tickers,
     resolve_run_date,
     resolve_output_root,
@@ -80,6 +81,21 @@ def test_resolve_output_root_sanitizes_custom_universe_name() -> None:
         universe_name="Personal Watchlist/Tech",
         universe_tickers="TSLA,NVDA",
     ) == Path("output/daily-personal-watchlist-tech")
+
+
+def test_load_universe_tickers_file_normalizes_for_run_daily(tmp_path: Path) -> None:
+    tickers_file = tmp_path / "expanded.txt"
+    tickers_file.write_text("tsla\nnvda\nbrk.b\nTSLA\n", encoding="utf-8")
+
+    assert load_universe_tickers_file(tickers_file) == "TSLA,NVDA,BRK-B"
+
+
+def test_resolve_output_root_separates_expanded_file_universe() -> None:
+    assert resolve_output_root(
+        None,
+        universe_name="nasdaq-expanded-500",
+        universe_tickers="AAPL,MSFT,NVDA",
+    ) == Path("output/daily-nasdaq-expanded-500")
 
 
 def test_resolve_assistant_user_tickers_uses_default_for_core_universe() -> None:

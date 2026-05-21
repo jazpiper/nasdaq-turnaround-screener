@@ -7,6 +7,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, cast
 from urllib.error import HTTPError
 from urllib.parse import urlparse, urlencode
@@ -359,10 +360,28 @@ class YFinanceDailyBarFetcher:
 
     provider_name = "yfinance"
 
-    def __init__(self, *, period: str = "6mo", interval: str = "1d", auto_adjust: bool = False):
+    def __init__(
+        self,
+        *,
+        period: str = "6mo",
+        interval: str = "1d",
+        auto_adjust: bool = False,
+        batch_size: int | None = None,
+        batch_pause_seconds: float = 0.0,
+        threads: bool = True,
+        daily_request_cap: int | None = None,
+        quota_state_path: str | Path | None = None,
+        sleeper: Callable[[float], None] | None = None,
+    ):
         self.period = period
         self.interval = interval
         self.auto_adjust = auto_adjust
+        self.batch_size = batch_size
+        self.batch_pause_seconds = max(batch_pause_seconds, 0.0)
+        self.threads = threads
+        self.daily_request_cap = daily_request_cap
+        self.quota_state_path = Path(quota_state_path) if quota_state_path else None
+        self.sleeper = sleeper or time.sleep
 
     def fetch(self, tickers: Iterable[str]) -> FetchResult:
         ticker_list = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
@@ -381,29 +400,46 @@ class YFinanceDailyBarFetcher:
         except ModuleNotFoundError as exc:
             raise RuntimeError("yfinance is required to fetch market data") from exc
 
-        data = yf.download(
-            tickers=ticker_list,
-            period=self.period,
-            interval=self.interval,
-            group_by="ticker",
-            auto_adjust=self.auto_adjust,
-            progress=False,
-            threads=True,
-        )
-
         bars_by_ticker: dict[str, list[DailyBar]] = {}
         failed_tickers: dict[str, str] = {}
 
-        for ticker in ticker_list:
+        for batch_index, batch in enumerate(_chunked(ticker_list, self.batch_size)):
+            if batch_index and self.batch_pause_seconds > 0:
+                self.sleeper(self.batch_pause_seconds)
+            if not self._reserve_daily_request_quota(len(batch)):
+                for ticker in batch:
+                    failed_tickers[ticker] = "Skipped: yfinance daily request cap would be exceeded"
+                continue
             try:
-                ticker_frame = data[ticker] if len(ticker_list) > 1 else data
-                rows = _flatten_yfinance_rows(ticker_frame.reset_index().to_dict("records"))
-                bars = normalize_ohlcv_rows(ticker, rows)
-                if not bars:
-                    raise ValueError("No price rows returned")
-                bars_by_ticker[ticker] = bars
+                data = yf.download(
+                    tickers=batch,
+                    period=self.period,
+                    interval=self.interval,
+                    group_by="ticker",
+                    auto_adjust=self.auto_adjust,
+                    progress=False,
+                    threads=self.threads,
+                )
             except Exception as exc:
-                failed_tickers[ticker] = sanitize_provider_message(exc)
+                message = sanitize_provider_message(exc)
+                for ticker in batch:
+                    failed_tickers[ticker] = message
+                continue
+            if data is None:
+                for ticker in batch:
+                    failed_tickers[ticker] = "No price rows returned"
+                continue
+
+            for ticker in batch:
+                try:
+                    ticker_frame = data[ticker] if len(batch) > 1 else data
+                    rows = _flatten_yfinance_rows(ticker_frame.reset_index().to_dict("records"))
+                    bars = normalize_ohlcv_rows(ticker, rows)
+                    if not bars:
+                        raise ValueError("No price rows returned")
+                    bars_by_ticker[ticker] = bars
+                except Exception as exc:
+                    failed_tickers[ticker] = sanitize_provider_message(exc)
 
         status = build_source_status(
             provider=self.provider_name,
@@ -414,6 +450,40 @@ class YFinanceDailyBarFetcher:
             message=next(iter(failed_tickers.values()), None),
         ).as_dict()
         return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
+
+    def _reserve_daily_request_quota(self, request_count: int) -> bool:
+        if not self.daily_request_cap or self.daily_request_cap <= 0 or not self.quota_state_path:
+            return True
+        today = datetime.now(timezone.utc).date().isoformat()
+        path = self.quota_state_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state: dict[str, object] = {}
+        if path.exists():
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, JSONDecodeError):
+                state = {}
+        raw_used = state.get("used", 0) if state.get("date") == today else 0
+        try:
+            used = int(cast(Any, raw_used))
+        except (TypeError, ValueError):
+            used = 0
+        if used + request_count > self.daily_request_cap:
+            return False
+        state = {
+            "date": today,
+            "used": used + request_count,
+            "cap": self.daily_request_cap,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        return True
+
+
+def _chunked(items: list[str], size: int | None) -> list[list[str]]:
+    if size is None or size <= 0 or size >= len(items):
+        return [items]
+    return [items[index : index + size] for index in range(0, len(items), size)]
 
 
 class TwelveDataDailyBarFetcher:
@@ -680,6 +750,35 @@ def _canonical_provider_name(provider: str) -> str:
     raise MarketDataProviderError(f"Unsupported market data provider: {provider}")
 
 
+def _optional_positive_int_env(name: str) -> int | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return None
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _nonnegative_float_env(name: str, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        parsed = float(raw_value)
+    except ValueError:
+        return default
+    return max(parsed, 0.0)
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _build_single_market_data_fetcher(
     provider: str,
     *,
@@ -691,7 +790,13 @@ def _build_single_market_data_fetcher(
 ) -> MarketDataFetcher | None:
     canonical_provider = _canonical_provider_name(provider)
     if canonical_provider == "yfinance":
-        return YFinanceDailyBarFetcher()
+        return YFinanceDailyBarFetcher(
+            batch_size=_optional_positive_int_env("SCREENER_YFINANCE_BATCH_SIZE"),
+            batch_pause_seconds=_nonnegative_float_env("SCREENER_YFINANCE_BATCH_PAUSE_SECONDS", 0.0),
+            threads=_bool_env("SCREENER_YFINANCE_THREADS", True),
+            daily_request_cap=_optional_positive_int_env("SCREENER_YFINANCE_DAILY_REQUEST_CAP"),
+            quota_state_path=os.getenv("SCREENER_YFINANCE_QUOTA_STATE_PATH"),
+        )
     if canonical_provider == "twelve-data":
         if allow_missing_credentials and not (twelve_data_api_key or os.getenv("TWELVE_DATA_API_KEY")):
             return None
