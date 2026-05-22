@@ -15,6 +15,7 @@ from screener.config import Settings, get_settings
 from screener.models import ScreenRunResult
 from screener.pipeline import ScreenPipeline, build_context
 from screener.recommendations import (
+    DailyArtifactConsistencyError,
     build_daily_top3_recommendations,
     summarize_recommendation_outcomes,
     update_recommendation_outcomes,
@@ -208,6 +209,9 @@ def build_daily_top3_recommendations_command(
         raise typer.Exit(code=1) from exc
     except json.JSONDecodeError as exc:
         typer.echo(f"Daily report is not valid JSON: {daily_report_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except DailyArtifactConsistencyError as exc:
+        typer.echo(f"Daily artifact consistency check failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     except OSError as exc:
         typer.echo(f"Recommendation artifacts could not be written: {exc}", err=True)

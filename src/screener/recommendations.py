@@ -8,6 +8,10 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Iterable
 
+
+class DailyArtifactConsistencyError(ValueError):
+    """Raised when baseline daily artifact date metadata is inconsistent."""
+
 ALGORITHM_VERSION = "daily-top3-v0"
 SCORE_SCHEMA_VERSION = 1
 SNAPSHOT_SCHEMA_VERSION = 2
@@ -684,6 +688,61 @@ def write_daily_top3_artifacts(payload: dict[str, Any], output_dir: Path, *, per
     return json_path, markdown_path
 
 
+def _looks_like_iso_date(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value).date()
+    except ValueError:
+        return False
+    return len(value) == 10
+
+
+def validate_daily_artifact_consistency(daily_report_path: Path, *, daily_report: dict[str, Any]) -> None:
+    report_date_raw = daily_report.get("date")
+    report_date = str(report_date_raw).strip() if report_date_raw is not None else ""
+
+    parent_name = daily_report_path.parent.name
+    latest_path = daily_report_path.parent
+    requires_strict_checks = latest_path.name == "latest" or _looks_like_iso_date(parent_name)
+    if not requires_strict_checks:
+        return
+
+    errors: list[str] = []
+    if not _looks_like_iso_date(report_date):
+        errors.append(f"daily-report.date_invalid:{report_date_raw!r}")
+
+    metadata_path = daily_report_path.parent / "run-metadata.json"
+    metadata_run_date: str | None = None
+    if not metadata_path.exists():
+        errors.append(f"run-metadata.missing:{metadata_path}")
+    else:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata_run_date_raw = metadata.get("run_date")
+        metadata_run_date = str(metadata_run_date_raw).strip() if metadata_run_date_raw is not None else ""
+        if not _looks_like_iso_date(metadata_run_date):
+            errors.append(f"run-metadata.run_date_invalid:{metadata_run_date_raw!r}")
+
+    if report_date and metadata_run_date and report_date != metadata_run_date:
+        errors.append(f"daily-report.date!=run-metadata.run_date:{report_date}!={metadata_run_date}")
+
+    if _looks_like_iso_date(parent_name) and report_date and parent_name != report_date:
+        errors.append(f"report_dir!=daily-report.date:{parent_name}!={report_date}")
+    if _looks_like_iso_date(parent_name) and metadata_run_date and parent_name != metadata_run_date:
+        errors.append(f"report_dir!=run-metadata.run_date:{parent_name}!={metadata_run_date}")
+
+    if latest_path.name == "latest" and latest_path.is_symlink():
+        latest_target_name = latest_path.resolve(strict=False).name
+        if _looks_like_iso_date(latest_target_name) and report_date and latest_target_name != report_date:
+            errors.append(f"latest_target!=daily-report.date:{latest_target_name}!={report_date}")
+        if _looks_like_iso_date(latest_target_name) and metadata_run_date and latest_target_name != metadata_run_date:
+            errors.append(f"latest_target!=run-metadata.run_date:{latest_target_name}!={metadata_run_date}")
+
+    if errors:
+        joined = "; ".join(errors)
+        raise DailyArtifactConsistencyError(
+            f"Baseline daily artifact consistency check failed for {daily_report_path}: {joined}"
+        )
+
+
 def build_daily_top3_recommendations(
     *,
     daily_report_path: Path,
@@ -691,6 +750,7 @@ def build_daily_top3_recommendations(
     output_dir: Path,
 ) -> DailyTop3Result:
     daily_report = json.loads(daily_report_path.read_text(encoding="utf-8"))
+    validate_daily_artifact_consistency(daily_report_path, daily_report=daily_report)
     payload = build_daily_top3_payload(daily_report)
     provisional_json_path, provisional_markdown_path = write_daily_top3_artifacts(payload, output_dir, persisted=False)
     run_id = persist_daily_top3(payload, db_path=db_path, markdown_path=provisional_markdown_path, json_path=provisional_json_path)

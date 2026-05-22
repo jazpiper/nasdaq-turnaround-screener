@@ -303,6 +303,37 @@ def test_cli_build_daily_top3_recommendations_writes_report(tmp_path: Path) -> N
     assert db_path.exists()
 
 
+def test_cli_build_daily_top3_recommendations_fails_on_latest_date_mismatch(tmp_path: Path) -> None:
+    output_root = tmp_path / "output" / "daily"
+    run_dir = output_root / "2026-05-08"
+    latest_dir = output_root / "latest"
+    run_dir.mkdir(parents=True)
+    latest_dir.symlink_to(run_dir.name, target_is_directory=True)
+
+    (run_dir / "daily-report.json").write_text(
+        json.dumps(_daily_report([_candidate("AAA", 70, 78)], run_date="2026-05-19")),
+        encoding="utf-8",
+    )
+    (run_dir / "run-metadata.json").write_text(json.dumps({"run_date": "2026-05-08"}), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-daily-top3-recommendations",
+            "--daily-report-path",
+            str(latest_dir / "daily-report.json"),
+            "--db-path",
+            str(tmp_path / "recommendations.sqlite3"),
+            "--output-dir",
+            str(tmp_path / "recommendations"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Daily artifact consistency check failed:" in result.output
+    assert "latest_target!=daily-report.date:2026-05-08!=2026-05-19" in result.output
+
+
 def _ohlcv(close: float, *, high: float | None = None, low: float | None = None) -> dict[str, float]:
     return {"open": close, "high": high if high is not None else close, "low": low if low is not None else close, "close": close}
 
