@@ -1,3 +1,10 @@
+---
+project: Nasdaq Turnaround Screener
+type: Runbook
+related: [Dashboard.md, architecture.md, operations.md, signals.md]
+updated: 2026-05-23
+---
+
 # OpenClaw Cron Runbook
 
 이 문서는 `OpenClaw` 쪽 운영자에게 그대로 전달해도 되는 수준의 cron 등록 및 소비(run + read) 지침입니다. 기준 저장소는 `nasdaq-turnaround-screener` 이고, 이 저장소는 `alert-events.json` producer 역할만 맡습니다. Telegram delivery와 실제 cron orchestration은 `OpenClaw` 가 담당합니다.
@@ -268,3 +275,13 @@ delivery policy:
 - daily consumer는 digest_alert 우선
 - daily final이 provisional보다 우선
 ```
+
+## 🔗 Related Documents
+| 문서 | 관계 |
+| :--- | :--- |
+| [Dashboard.md](./Dashboard.md) | 프로젝트 허브 (상위 색인) |
+| [Log.md](./Log.md) | 작업 로그 |
+| [Handoff.md](./Handoff.md) | 핸드오프 및 태스크 보드 |
+| [architecture.md](./architecture.md) | 시스템 아키텍처 |
+| [operations.md](./operations.md) | 운영 매뉴얼 및 명령어 |
+| [signals.md](./signals.md) | 스크리닝 시그널 규칙 |

@@ -1,3 +1,10 @@
+---
+project: Nasdaq Turnaround Screener
+type: Operations
+related: [Dashboard.md, architecture.md, signals.md, openclaw-cron-runbook.md]
+updated: 2026-05-23
+---
+
 # Operations Runbook
 
 ## 1. Bootstrap
@@ -273,3 +280,13 @@ env PYTHONPATH={project_root}/src {python} -m screener.cli.main collect-window -
 - alert sidecar generation이 실패하더라도 raw report / collection artifact는 이미 기록되어 남아 있을 수 있습니다.
 - Oracle SQL credential 누락이나 persistence 실패는 non-zero exit로 올립니다.
 - 운영 alert는 non-zero exit만 보지 말고 `collection-metadata.json` 의 `failed_count`, `skipped_due_to_credit_exhaustion_count`, `failures`, 또는 credit exhaustion failure reason 문자열도 함께 감시하는 편이 안전합니다.
+
+## 🔗 Related Documents
+| 문서 | 관계 |
+| :--- | :--- |
+| [Dashboard.md](./Dashboard.md) | 프로젝트 허브 (상위 색인) |
+| [Log.md](./Log.md) | 작업 로그 |
+| [Handoff.md](./Handoff.md) | 핸드오프 및 태스크 보드 |
+| [architecture.md](./architecture.md) | 시스템 아키텍처 |
+| [signals.md](./signals.md) | 스크리닝 시그널 규칙 |
+| [openclaw-cron-runbook.md](./openclaw-cron-runbook.md) | OpenClaw 크론 탭 가이드 |

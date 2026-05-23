@@ -1,3 +1,10 @@
+---
+project: Nasdaq Turnaround Screener
+type: Signals
+related: [Dashboard.md, architecture.md, operations.md, openclaw-cron-runbook.md]
+updated: 2026-05-23
+---
+
 # Screening Signals
 
 이 문서는 **현재 코드에 구현된 규칙만** 정리합니다. 아이디어 단계나 후속 확장 항목은 제외하고, 실제 후보 선별과 점수화에 쓰이는 기준만 남깁니다.
@@ -257,3 +264,13 @@ Backtest artifact는 전체 후보 평균뿐 아니라 아래 summary를 함께 
 - 섹터 뉴스
 - 시장 전체 risk-on/off
 - 장기 추세선 위치
+
+## 🔗 Related Documents
+| 문서 | 관계 |
+| :--- | :--- |
+| [Dashboard.md](./Dashboard.md) | 프로젝트 허브 (상위 색인) |
+| [Log.md](./Log.md) | 작업 로그 |
+| [Handoff.md](./Handoff.md) | 핸드오프 및 태스크 보드 |
+| [architecture.md](./architecture.md) | 시스템 아키텍처 |
+| [operations.md](./operations.md) | 운영 매뉴얼 및 명령어 |
+| [openclaw-cron-runbook.md](./openclaw-cron-runbook.md) | OpenClaw 크론 탭 가이드 |

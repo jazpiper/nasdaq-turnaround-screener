@@ -1,3 +1,10 @@
+---
+project: Nasdaq Turnaround Screener
+type: Architecture
+related: [Dashboard.md, operations.md, signals.md, openclaw-cron-runbook.md]
+updated: 2026-05-23
+---
+
 # Architecture
 
 ## 1. System Boundary
@@ -158,3 +165,13 @@ CLI tune
 ## 9. OpenClaw Boundary
 - 이 저장소는 데이터 처리와 alert-ready sidecar 생성을 담당하고, OpenClaw는 실행 orchestration과 Telegram delivery를 담당합니다.
 - 운영 명령과 환경변수는 `docs/operations.md`, 현재 screening 규칙은 `docs/signals.md` 를 기준 문서로 봅니다.
+
+## 🔗 Related Documents
+| 문서 | 관계 |
+| :--- | :--- |
+| [Dashboard.md](./Dashboard.md) | 프로젝트 허브 (상위 색인) |
+| [Log.md](./Log.md) | 작업 로그 |
+| [Handoff.md](./Handoff.md) | 핸드오프 및 태스크 보드 |
+| [operations.md](./operations.md) | 운영 매뉴얼 및 명령어 |
+| [signals.md](./signals.md) | 스크리닝 시그널 규칙 |
+| [openclaw-cron-runbook.md](./openclaw-cron-runbook.md) | OpenClaw 크론 탭 가이드 |
