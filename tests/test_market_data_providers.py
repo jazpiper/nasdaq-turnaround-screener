@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import date
 from pathlib import Path
 import sys
 import tempfile
+from types import ModuleType
 import unittest
 from urllib.error import HTTPError
 from unittest import mock
@@ -16,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from screener.config import get_settings
 from screener.data.market_data import (
     DEFAULT_HTTP_TIMEOUT_SECONDS,
+    DailyBar,
     FetchResult,
     FMPDailyBarFetcher,
     FinnhubDailyBarFetcher,
@@ -49,6 +52,8 @@ class MarketDataProviderTests(unittest.TestCase):
             "SCREENER_YFINANCE_THREADS",
             "SCREENER_YFINANCE_DAILY_REQUEST_CAP",
             "SCREENER_YFINANCE_QUOTA_STATE_PATH",
+            "SCREENER_MARKET_CACHE_ORACLE_ENABLED",
+            "SCREENER_MARKET_CACHE_MIN_BARS",
         ):
             os.environ.pop(key, None)
 
@@ -568,6 +573,64 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual([call["tickers"] for call in calls], [["AAA"]])
         self.assertIn("AAA", result.bars_by_ticker)
         self.assertEqual(result.failed_tickers, {"BBB": "Skipped: yfinance daily request cap would be exceeded"})
+
+    def test_yfinance_fetcher_uses_daily_bar_cache_before_download(self):
+        calls: list[dict[str, object]] = []
+        cached_bar = DailyBar(
+            ticker="AAA",
+            trading_date=date(2026, 4, 21),
+            open=10.0,
+            high=11.0,
+            low=9.0,
+            close=10.5,
+            adj_close=10.5,
+            volume=1000,
+        )
+
+        class FakeCache:
+            def __init__(self) -> None:
+                self.upserts: list[dict[str, list[DailyBar]]] = []
+
+            def read_daily_bars(self, tickers, *, provider, interval, adjustment):
+                self.read_args = (list(tickers), provider, interval, adjustment)
+                return {"AAA": [cached_bar]}
+
+            def upsert_daily_bars(self, bars_by_ticker, *, provider, interval, adjustment):
+                self.upserts.append(dict(bars_by_ticker))
+
+        def frame_for(tickers: list[str]) -> pd.DataFrame:
+            index = pd.Index([pd.Timestamp("2026-04-21")], name="Date")
+            columns = pd.MultiIndex.from_product(
+                [tickers, ["Open", "High", "Low", "Close", "Adj Close", "Volume"]],
+                names=["Ticker", "Price"],
+            )
+            return pd.DataFrame([[20, 21, 19, 20.5, 20.5, 2_000]], index=index, columns=columns)
+
+        fake_yfinance = ModuleType("yfinance")
+
+        def download(**kwargs):
+            calls.append(kwargs)
+            return frame_for(list(kwargs["tickers"]))
+
+        setattr(fake_yfinance, "download", download)
+
+        cache = FakeCache()
+        original_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = fake_yfinance
+        try:
+            fetcher = YFinanceDailyBarFetcher(batch_size=1, daily_bar_cache=cache)
+            result = fetcher.fetch(["AAA", "BBB"])
+        finally:
+            if original_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = original_module
+
+        self.assertEqual([call["tickers"] for call in calls], [["BBB"]])
+        self.assertEqual(result.bars_by_ticker["AAA"], [cached_bar])
+        self.assertIn("BBB", result.bars_by_ticker)
+        self.assertEqual(set(cache.upserts[0]), {"BBB"})
+        self.assertTrue(result.source_statuses[0]["used_cache"])
 
     def test_load_openclaw_secrets_reads_nested_values(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

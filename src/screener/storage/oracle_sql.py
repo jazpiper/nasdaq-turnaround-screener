@@ -12,7 +12,9 @@ from screener.config import (
     ORACLE_SQL_PASSWORD_ENV_NAMES,
     ORACLE_SQL_USER_ENV_NAMES,
     Settings,
+    get_settings,
 )
+from screener.data.market_data import DailyBar, normalize_ticker_list
 from screener.models import ScreenRunResult
 from screener.storage.oracle_schema import initialize_oracle_schema
 
@@ -29,6 +31,173 @@ class OracleSqlCredentials:
 
 class OracleSqlStorageError(RuntimeError):
     """Raised when Oracle SQL persistence cannot be configured or completed."""
+
+
+class OracleMarketDataCache:
+    def __init__(self, connector: Callable[[], Any]) -> None:
+        self.connector = connector
+
+    @classmethod
+    def from_env(cls) -> "OracleMarketDataCache":
+        return cls.from_settings(get_settings())
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "OracleMarketDataCache":
+        missing = _missing_credential_env_names(settings)
+        if missing:
+            raise OracleSqlStorageError("Oracle SQL credentials are missing: " + ", ".join(missing))
+        try:
+            import oracledb
+        except ModuleNotFoundError as exc:  # pragma: no cover, exercised in integration environments
+            raise OracleSqlStorageError("oracledb is required for Oracle market data cache") from exc
+
+        credentials = OracleSqlCredentials(
+            user=str(settings.oracle_sql_user),
+            password=str(settings.oracle_sql_password),
+            connect_string=str(settings.oracle_sql_connect_string),
+        )
+        return cls(
+            connector=lambda: oracledb.connect(
+                user=credentials.user,
+                password=credentials.password,
+                dsn=credentials.connect_string,
+            )
+        )
+
+    def read_daily_bars(
+        self,
+        tickers: Any,
+        *,
+        provider: str,
+        interval: str,
+        adjustment: str,
+    ) -> dict[str, list[DailyBar]]:
+        ticker_list = normalize_ticker_list(tickers)
+        if not ticker_list:
+            return {}
+        connection = self.connector()
+        try:
+            cursor = connection.cursor()
+            try:
+                bars_by_ticker: dict[str, list[DailyBar]] = {ticker: [] for ticker in ticker_list}
+                for ticker in ticker_list:
+                    cursor.execute(
+                        """
+                        SELECT symbol, trade_date, open_price, high_price, low_price,
+                               close_price, adj_close_price, volume
+                        FROM market_daily_bars
+                        WHERE symbol = :symbol
+                          AND provider = :provider
+                          AND interval_code = :interval_code
+                          AND adjustment = :adjustment
+                        ORDER BY trade_date
+                        """,
+                        {
+                            "symbol": ticker,
+                            "provider": provider,
+                            "interval_code": interval,
+                            "adjustment": adjustment,
+                        },
+                    )
+                    for row in cursor.fetchall():
+                        bars_by_ticker[ticker].append(
+                            DailyBar(
+                                ticker=str(row[0]),
+                                trading_date=_coerce_date(row[1]),
+                                open=float(row[2]),
+                                high=float(row[3]),
+                                low=float(row[4]),
+                                close=float(row[5]),
+                                adj_close=float(row[6]),
+                                volume=float(row[7]),
+                            )
+                        )
+                return {ticker: bars for ticker, bars in bars_by_ticker.items() if bars}
+            finally:
+                _close_safely(cursor)
+        finally:
+            _close_safely(connection)
+
+    def upsert_daily_bars(
+        self,
+        bars_by_ticker: dict[str, list[DailyBar]],
+        *,
+        provider: str,
+        interval: str,
+        adjustment: str,
+    ) -> None:
+        rows = [
+            {
+                "symbol": bar.ticker.upper(),
+                "trade_date": bar.trading_date,
+                "interval_code": interval,
+                "adjustment": adjustment,
+                "provider": provider,
+                "open_price": bar.open,
+                "high_price": bar.high,
+                "low_price": bar.low,
+                "close_price": bar.close,
+                "adj_close_price": bar.adj_close,
+                "volume": bar.volume,
+            }
+            for bars in bars_by_ticker.values()
+            for bar in bars
+        ]
+        if not rows:
+            return
+        connection = self.connector()
+        try:
+            cursor = connection.cursor()
+            try:
+                for row in rows:
+                    cursor.execute(
+                        """
+                        MERGE INTO market_daily_bars target
+                        USING (
+                          SELECT :symbol AS symbol,
+                                 :trade_date AS trade_date,
+                                 :interval_code AS interval_code,
+                                 :adjustment AS adjustment,
+                                 :provider AS provider
+                          FROM dual
+                        ) source
+                        ON (
+                          target.symbol = source.symbol
+                          AND target.trade_date = source.trade_date
+                          AND target.interval_code = source.interval_code
+                          AND target.adjustment = source.adjustment
+                          AND target.provider = source.provider
+                        )
+                        WHEN MATCHED THEN UPDATE SET
+                          open_price = :open_price,
+                          high_price = :high_price,
+                          low_price = :low_price,
+                          close_price = :close_price,
+                          adj_close_price = :adj_close_price,
+                          volume = :volume,
+                          source_status = 'ok',
+                          fetched_at = SYSTIMESTAMP,
+                          updated_at = SYSTIMESTAMP
+                        WHEN NOT MATCHED THEN INSERT (
+                          symbol, trade_date, interval_code, adjustment, provider,
+                          open_price, high_price, low_price, close_price, adj_close_price,
+                          volume, source_status, fetched_at, updated_at
+                        ) VALUES (
+                          :symbol, :trade_date, :interval_code, :adjustment, :provider,
+                          :open_price, :high_price, :low_price, :close_price, :adj_close_price,
+                          :volume, 'ok', SYSTIMESTAMP, SYSTIMESTAMP
+                        )
+                        """,
+                        row,
+                    )
+            finally:
+                _close_safely(cursor)
+            connection.commit()
+        except Exception:
+            _rollback_safely(connection)
+            raise
+        finally:
+            _close_safely(connection)
 
 
 class OracleSqlStorage:
@@ -396,6 +565,18 @@ def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value))
+
+
+def _coerce_date(value: Any) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "date"):
+        candidate = value.date()
+        if isinstance(candidate, date):
+            return candidate
+    return date.fromisoformat(str(value))
 
 
 def _rollback_safely(connection: Any) -> None:

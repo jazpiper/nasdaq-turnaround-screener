@@ -61,6 +61,30 @@ class MarketDataFetcher(Protocol):
         """Fetch normalized daily OHLCV bars for each ticker."""
 
 
+class DailyBarCache(Protocol):
+    def read_daily_bars(
+        self,
+        tickers: Iterable[str],
+        *,
+        provider: str,
+        interval: str,
+        adjustment: str,
+    ) -> dict[str, list[DailyBar]]:
+        """Return cached daily bars keyed by ticker."""
+        ...
+
+    def upsert_daily_bars(
+        self,
+        bars_by_ticker: Mapping[str, list[DailyBar]],
+        *,
+        provider: str,
+        interval: str,
+        adjustment: str,
+    ) -> None:
+        """Persist freshly fetched daily bars."""
+        ...
+
+
 def _validate_twelve_data_base_url(base_url: str) -> str:
     parsed = urlparse(base_url)
     if parsed.scheme not in {"http", "https"}:
@@ -372,6 +396,8 @@ class YFinanceDailyBarFetcher:
         daily_request_cap: int | None = None,
         quota_state_path: str | Path | None = None,
         sleeper: Callable[[float], None] | None = None,
+        daily_bar_cache: DailyBarCache | None = None,
+        min_cached_bars: int = 1,
     ):
         self.period = period
         self.interval = interval
@@ -382,6 +408,8 @@ class YFinanceDailyBarFetcher:
         self.daily_request_cap = daily_request_cap
         self.quota_state_path = Path(quota_state_path) if quota_state_path else None
         self.sleeper = sleeper or time.sleep
+        self.daily_bar_cache = daily_bar_cache
+        self.min_cached_bars = max(min_cached_bars, 1)
 
     def fetch(self, tickers: Iterable[str]) -> FetchResult:
         ticker_list = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
@@ -402,8 +430,28 @@ class YFinanceDailyBarFetcher:
 
         bars_by_ticker: dict[str, list[DailyBar]] = {}
         failed_tickers: dict[str, str] = {}
+        used_cache = False
+        ticker_list_to_download = list(ticker_list)
 
-        for batch_index, batch in enumerate(_chunked(ticker_list, self.batch_size)):
+        if self.daily_bar_cache is not None:
+            try:
+                cached = self.daily_bar_cache.read_daily_bars(
+                    ticker_list,
+                    provider=self.provider_name,
+                    interval=self.interval,
+                    adjustment=self._adjustment_key(),
+                )
+            except Exception:
+                cached = {}
+            for ticker in ticker_list:
+                cached_bars = cached.get(ticker, [])
+                if len(cached_bars) >= self.min_cached_bars:
+                    bars_by_ticker[ticker] = sorted(cached_bars, key=lambda bar: bar.trading_date)
+                    used_cache = True
+            ticker_list_to_download = [ticker for ticker in ticker_list if ticker not in bars_by_ticker]
+
+        fetched_bars: dict[str, list[DailyBar]] = {}
+        for batch_index, batch in enumerate(_chunked(ticker_list_to_download, self.batch_size)):
             if batch_index and self.batch_pause_seconds > 0:
                 self.sleeper(self.batch_pause_seconds)
             if not self._reserve_daily_request_quota(len(batch)):
@@ -438,8 +486,20 @@ class YFinanceDailyBarFetcher:
                     if not bars:
                         raise ValueError("No price rows returned")
                     bars_by_ticker[ticker] = bars
+                    fetched_bars[ticker] = bars
                 except Exception as exc:
                     failed_tickers[ticker] = sanitize_provider_message(exc)
+
+        if self.daily_bar_cache is not None and fetched_bars:
+            try:
+                self.daily_bar_cache.upsert_daily_bars(
+                    fetched_bars,
+                    provider=self.provider_name,
+                    interval=self.interval,
+                    adjustment=self._adjustment_key(),
+                )
+            except Exception:
+                pass
 
         status = build_source_status(
             provider=self.provider_name,
@@ -447,9 +507,13 @@ class YFinanceDailyBarFetcher:
             attempted=len(ticker_list),
             successful=len(bars_by_ticker),
             failed=len(failed_tickers),
+            used_cache=used_cache,
             message=next(iter(failed_tickers.values()), None),
         ).as_dict()
         return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
+
+    def _adjustment_key(self) -> str:
+        return "auto_adjust_true" if self.auto_adjust else "auto_adjust_false"
 
     def _reserve_daily_request_quota(self, request_count: int) -> bool:
         if not self.daily_request_cap or self.daily_request_cap <= 0 or not self.quota_state_path:
@@ -779,6 +843,17 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _build_oracle_market_data_cache_if_enabled() -> DailyBarCache | None:
+    if not _bool_env("SCREENER_MARKET_CACHE_ORACLE_ENABLED", False):
+        return None
+    try:
+        from screener.storage import OracleMarketDataCache
+
+        return OracleMarketDataCache.from_env()
+    except Exception:
+        return None
+
+
 def _build_single_market_data_fetcher(
     provider: str,
     *,
@@ -796,6 +871,8 @@ def _build_single_market_data_fetcher(
             threads=_bool_env("SCREENER_YFINANCE_THREADS", True),
             daily_request_cap=_optional_positive_int_env("SCREENER_YFINANCE_DAILY_REQUEST_CAP"),
             quota_state_path=os.getenv("SCREENER_YFINANCE_QUOTA_STATE_PATH"),
+            daily_bar_cache=_build_oracle_market_data_cache_if_enabled(),
+            min_cached_bars=_optional_positive_int_env("SCREENER_MARKET_CACHE_MIN_BARS") or 1,
         )
     if canonical_provider == "twelve-data":
         if allow_missing_credentials and not (twelve_data_api_key or os.getenv("TWELVE_DATA_API_KEY")):

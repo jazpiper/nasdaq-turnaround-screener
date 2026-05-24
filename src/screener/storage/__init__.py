@@ -1,5 +1,5 @@
 """Storage adapters."""
 
-from .oracle_sql import OracleSqlStorage, OracleSqlStorageError
+from .oracle_sql import OracleMarketDataCache, OracleSqlStorage, OracleSqlStorageError
 
-__all__ = ["OracleSqlStorage", "OracleSqlStorageError"]
+__all__ = ["OracleMarketDataCache", "OracleSqlStorage", "OracleSqlStorageError"]

@@ -6,31 +6,40 @@ from pathlib import Path
 
 from screener.collector import CollectedQuote, CollectionArtifacts, CollectionPlan, CollectionResult
 from screener.config import Settings
+from screener.data.market_data import DailyBar
 from screener.models import CandidateResult, RunMetadata, ScoreBreakdown, ScreenRunResult
-from screener.storage.oracle_sql import OracleSqlStorage, OracleSqlStorageError
+from screener.storage.oracle_sql import OracleMarketDataCache, OracleSqlStorage, OracleSqlStorageError
 
 
 class FakeCursor:
-    def __init__(self, statements: list[tuple[str, dict | None]]) -> None:
+    def __init__(self, statements: list[tuple[str, dict | None]], rows_by_symbol: dict[str, list[tuple]] | None = None) -> None:
         self.statements = statements
+        self.rows_by_symbol = rows_by_symbol or {}
+        self._last_rows: list[tuple] = []
         self.closed = False
 
     def execute(self, statement: str, parameters: dict | None = None) -> None:
         self.statements.append((" ".join(statement.split()), parameters))
+        symbol = str(parameters.get("symbol")) if parameters and parameters.get("symbol") is not None else ""
+        self._last_rows = list(self.rows_by_symbol.get(symbol, []))
+
+    def fetchall(self) -> list[tuple]:
+        return self._last_rows
 
     def close(self) -> None:
         self.closed = True
 
 
 class FakeConnection:
-    def __init__(self) -> None:
+    def __init__(self, rows_by_symbol: dict[str, list[tuple]] | None = None) -> None:
         self.statements: list[tuple[str, dict | None]] = []
+        self.rows_by_symbol = rows_by_symbol or {}
         self.committed = False
         self.rolled_back = False
         self.closed = False
 
     def cursor(self) -> FakeCursor:
-        return FakeCursor(self.statements)
+        return FakeCursor(self.statements, self.rows_by_symbol)
 
     def commit(self) -> None:
         self.committed = True
@@ -227,3 +236,60 @@ def test_persist_intraday_collection_inserts_without_schema_ddl(tmp_path: Path) 
     )
     assert intraday_insert["credit_exhaustion_skips_json"] == "[]"
     assert intraday_insert["credit_exhaustion_skip_count"] == 0
+
+
+def test_market_data_cache_reads_daily_bars_from_oracle_rows() -> None:
+    connection = FakeConnection(
+        rows_by_symbol={
+            "AAPL": [
+                ("AAPL", datetime(2026, 4, 21, 0, 0), 170, 173, 169, 172, 172, 123456),
+            ]
+        }
+    )
+    cache = OracleMarketDataCache(connector=lambda: connection)
+
+    bars = cache.read_daily_bars(["aapl", "msft"], provider="yfinance", interval="1d", adjustment="auto_adjust_true")
+
+    assert list(bars) == ["AAPL"]
+    assert bars["AAPL"] == [
+        DailyBar(
+            ticker="AAPL",
+            trading_date=date(2026, 4, 21),
+            open=170.0,
+            high=173.0,
+            low=169.0,
+            close=172.0,
+            adj_close=172.0,
+            volume=123456.0,
+        )
+    ]
+    assert connection.closed is True
+    assert any("FROM market_daily_bars" in statement for statement, _ in connection.statements)
+
+
+def test_market_data_cache_upserts_daily_bars_with_merge() -> None:
+    connection = FakeConnection()
+    cache = OracleMarketDataCache(connector=lambda: connection)
+    bar = DailyBar(
+        ticker="AAPL",
+        trading_date=date(2026, 4, 21),
+        open=170.0,
+        high=173.0,
+        low=169.0,
+        close=172.0,
+        adj_close=172.0,
+        volume=123456.0,
+    )
+
+    cache.upsert_daily_bars({"AAPL": [bar]}, provider="yfinance", interval="1d", adjustment="auto_adjust_true")
+
+    assert connection.committed is True
+    assert connection.rolled_back is False
+    assert connection.closed is True
+    merge_parameters = next(parameters for statement, parameters in connection.statements if "MERGE INTO market_daily_bars" in statement)
+    assert merge_parameters is not None
+    assert merge_parameters["symbol"] == "AAPL"
+    assert merge_parameters["trade_date"] == date(2026, 4, 21)
+    assert merge_parameters["provider"] == "yfinance"
+    assert merge_parameters["interval_code"] == "1d"
+    assert merge_parameters["adjustment"] == "auto_adjust_true"

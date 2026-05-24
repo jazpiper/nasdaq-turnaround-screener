@@ -47,6 +47,7 @@ daily runner는 `uv sync --extra dev` 기반 `.venv` 준비, `output/daily/YYYY-
 - `scripts/build_nasdaq_expanded_tickers.py`는 NASDAQ Trader `nasdaqlisted.txt`에서 test issue/ETF와 obvious warrant/unit/right/preferred/note instrument를 제외한 deterministic 후보 파일을 만듭니다. 기본 산출물은 `config/nasdaq-expanded-500.txt`입니다.
 - `scripts/run_nasdaq_expanded_discovery.py`는 확장 universe 관찰용 sidecar입니다. daily 산출물은 `output/daily-nasdaq-expanded-500`, Top3 산출물/SQLite DB는 `output/recommendations-expanded`를 사용해 기존 `output/daily/latest` 및 `output/recommendations/recommendations.sqlite3` baseline과 섞지 않습니다. 이 lane은 discovery/성과비교용이며 자동매수 또는 production threshold 변경을 하지 않습니다.
 - expanded-500 lane은 broad discovery가 paid/API-key provider quota를 소모하지 않도록 기본 provider를 `yfinance`로 고정합니다. yfinance/Yahoo는 안정적인 공개 일일 quota를 제공하지 않으므로, repo 내부에서는 “외부 quota 추정” 대신 자체 hard cap을 둡니다. 기본값은 `SCREENER_YFINANCE_BATCH_SIZE=1`, `SCREENER_YFINANCE_BATCH_PAUSE_SECONDS=1`, `SCREENER_YFINANCE_THREADS=false`, `SCREENER_YFINANCE_DAILY_REQUEST_CAP=750`, `SCREENER_YFINANCE_QUOTA_STATE_PATH=output/.quota/yfinance-shared.json`입니다. `scripts/run_daily.py`도 같은 shared ledger 기본값을 적용하므로 baseline NASDAQ-100 daily run이 실제로 yfinance까지 fallback하면 같은 cap에 포함됩니다. 같은 UTC 날짜에 cap을 초과할 경우 추가 Yahoo 호출은 수행하지 않고 해당 ticker를 skipped 처리합니다. 안정 실행이 확인되면 cap을 `1000 → 1500 → 2000` 순서로 올립니다.
+- `SCREENER_MARKET_CACHE_ORACLE_ENABLED=true` 를 켜면 `yfinance` daily fetcher가 Oracle `market_daily_bars`를 read-through/write-through cache로 사용합니다. cache hit ticker는 Yahoo 호출과 quota ledger 예약 대상에서 제외하고, missing ticker만 yfinance로 받아 성공분을 cache에 upsert합니다. Oracle credential/import/connectivity가 없거나 cache read/write가 실패하면 기존 yfinance 경로로 fallback하므로 flag 활성화 전에는 `init-oracle-schema` 와 소규모 dry-run으로 hit/miss 동작을 먼저 확인합니다.
 - `--overlay-tickers` 또는 `--overlay-file`은 기본 NASDAQ-100/custom universe에 hot-sector overlay ticker를 추가합니다. overlay file은 JSON/CSV/newline-separated text를 지원하고, `--overlay-name`은 output root suffix와 artifact metadata label에 쓰입니다.
 - `scripts/run_daily.py`는 custom tickers 또는 overlay와 기본 `--output-root` 생략 조합에서 root를 `output/daily-user-watchlist`, `output/daily-user-watchlist-hot-sector`처럼 universe/overlay별로 분리해 `output/daily/latest`와 alert-state 간섭을 피합니다. 명시적으로 같은 `--output-root`를 주면 그 값을 따릅니다.
 - custom ticker daily run은 성공 시 `output/assistant/latest-user-briefing-screener.{json,md}`도 함께 생성해 holdings/watchlist/big-tech용 compact briefing을 자동으로 갱신합니다.
@@ -220,6 +221,8 @@ uv run python scripts/apply_tuning_proposal.py output/tuning/<date>/tuning-propo
 - `SCREENER_INTRADAY_OUTPUT_ROOT`: intraday artifact root override
 - `SCREENER_INTRADAY_COLLECTOR_COMMAND`: intraday runner command template override
 - `SCREENER_ORACLE_SQL_ENABLED=1`: Oracle SQL persistence 기본 활성화
+- `SCREENER_MARKET_CACHE_ORACLE_ENABLED=true`: yfinance daily bar Oracle cache 활성화. 기본값은 비활성입니다.
+- `SCREENER_MARKET_CACHE_MIN_BARS`: ticker별 cache hit으로 인정할 최소 daily bar 개수. 기본값은 `1`입니다.
 - `ORACLE_DB_USER`, `ORACLE_DB_PASSWORD`, `ORACLE_DB_CONNECT_STRING`: Oracle SQL credential
 - `SCREENER_ORACLE_SQL_USER`, `SCREENER_ORACLE_SQL_PASSWORD`, `SCREENER_ORACLE_SQL_CONNECT_STRING`: 기존/레거시 Oracle SQL credential alias. 같은 값이 둘 다 있으면 `ORACLE_DB_*` 가 우선합니다.
 - `SCREENER_OPENCLAW_SECRETS_PATH` 또는 `OPENCLAW_SECRETS_PATH`: OpenClaw secrets file path override
@@ -236,6 +239,7 @@ uv run python -m screener.cli.main init-oracle-schema
 - `--persist-oracle-sql` 이 켜진 non-dry-run `run` / `collect-window` 는 데이터 수집 전에 Oracle credential/import/connectivity preflight를 먼저 실행합니다. credential 누락은 secret 값을 출력하지 않고 non-zero exit로 즉시 실패합니다.
 - preflight가 성공한 뒤 DB가 중간에 장애를 일으키면 persistence 단계에서 non-zero exit가 날 수 있습니다. 이 경우 raw artifact가 이미 남아 있을 수 있으므로 producer 성공 기준은 process exit code와 `Oracle SQL run id`/`Oracle SQL collection id` 로그를 함께 확인합니다.
 - `risk_adjusted_score` 같은 새 저장 컬럼이 추가된 배포 후에는 기존 DB에도 같은 명령을 다시 1회 실행해 additive migration을 적용해야 합니다.
+- `market_daily_bars` 와 `market_data_fetch_log` 는 yfinance 호출을 줄이기 위한 공통 market-data cache schema입니다. cache 활성화 전에도 같은 `init-oracle-schema` 명령으로 additive 생성됩니다.
 - 이후 `--persist-oracle-sql` 은 insert만 수행합니다.
 
 ## 10. OpenClaw Usage
