@@ -8,6 +8,13 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+for path in (SRC_ROOT, PROJECT_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from screener.dates import resolve_ny_run_date
+
 DEFAULT_TICKER_FILE = PROJECT_ROOT / "config" / "nasdaq-expanded-500.txt"
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "output" / "daily-nasdaq-expanded-500"
 DEFAULT_RECOMMENDATION_OUTPUT_DIR = PROJECT_ROOT / "output" / "recommendations-expanded"
@@ -15,9 +22,16 @@ DEFAULT_RECOMMENDATION_DB = DEFAULT_RECOMMENDATION_OUTPUT_DIR / "recommendations
 DEFAULT_UNIVERSE_NAME = "nasdaq-expanded-500"
 
 
+def resolve_run_date(value: str | None) -> str:
+    try:
+        return resolve_ny_run_date(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the isolated NASDAQ expanded-500 discovery lane.")
-    parser.add_argument("--date", default="ny-today", help="Run date as YYYY-MM-DD, auto, or ny-today")
+    parser.add_argument("--date", type=resolve_run_date, default=resolve_run_date(None), help="Run date as YYYY-MM-DD, auto, or ny-today")
     parser.add_argument("--ticker-file", type=Path, default=DEFAULT_TICKER_FILE, help="Expanded ticker file")
     parser.add_argument("--limit", type=int, default=500, help="Ticker count when rebuilding the ticker file")
     parser.add_argument("--skip-install", action="store_true", help="Pass --skip-install to scripts/run_daily.py")
@@ -80,7 +94,7 @@ def main() -> int:
     if args.skip_recommendations or args.dry_run:
         return 0
 
-    report_path = DEFAULT_OUTPUT_ROOT / "latest" / "daily-report.json"
+    report_path = DEFAULT_OUTPUT_ROOT / args.date / "daily-report.json"
     run(
         [
             sys.executable,
