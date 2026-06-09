@@ -36,10 +36,17 @@ def test_overlay_universe_report_payload_and_markdown(tmp_path: Path) -> None:
 
     assert comparison["baseline"]["candidate_count"] == 57
     assert comparison["overlay"]["candidate_count"] == 57
+    expected_overlay_sectors = ["semiconductors", "technology", "consumer_discretionary"]
+    expected_overlay_tickers = ["NVDA", "AVGO", "AMD", "QCOM", "MSFT", "AMZN", "TSLA", "BKNG", "COST"]
+    overlay_metadata = json.loads(DEFAULT_OVERLAY_METADATA_PATH.read_text(encoding="utf-8"))
+
     assert deltas["planned_ticker_count"] == 0
     assert deltas["candidate_count"] == 0
-    assert payload["overlay"]["selected_sectors"] == ["semiconductors", "technology", "energy"]
-    assert payload["overlay"]["tickers"] == ["NVDA", "AVGO", "AMD", "QCOM", "MSFT", "FANG", "BKR", "HAL", "SLB"]
+    assert payload["overlay"]["selected_sectors"] == expected_overlay_sectors
+    assert payload["overlay"]["tickers"] == expected_overlay_tickers
+    assert payload["overlay"]["selected_sectors"] == overlay_metadata["selected_sectors"]
+    assert payload["overlay"]["tickers"] == overlay_metadata["tickers"]
+    assert [signal["sector"] for signal in payload["overlay"]["signals"] if signal["selected"]] == expected_overlay_sectors
     assert payload["backtest"]["available"] is True
     assert [variant["variant_id"] for variant in payload["universe_variants"]] == [
         "core-nasdaq-100",
@@ -88,6 +95,6 @@ def test_overlay_universe_report_command_writes_artifacts(tmp_path: Path) -> Non
 
     assert result.exit_code == 0
     assert "Comparison: planned=102→102 (0), candidates=57→57 (0)" in result.stdout
-    assert "Overlay sectors: semiconductors, technology, energy" in result.stdout
+    assert "Overlay sectors: semiconductors, technology, consumer_discretionary" in result.stdout
     assert (output_dir / "overlay-universe-report.json").exists()
     assert (output_dir / "overlay-universe-report.md").exists()

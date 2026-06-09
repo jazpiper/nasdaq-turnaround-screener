@@ -287,6 +287,17 @@ def _safe_provider_status(value: object) -> list[dict[str, object]]:
         "used_stale_cache",
         "cooldown_active",
         "fallback_provider",
+        "target_date",
+        "cache_checked_ticker_count",
+        "cache_found_ticker_count",
+        "cache_hit_ticker_count",
+        "cache_target_date_coverage_count",
+        "cache_target_date_miss_count",
+        "cache_target_date_coverage_ratio",
+        "cache_latest_bar_date_min",
+        "cache_latest_bar_date_max",
+        "cache_target_date_miss_sample",
+        "downloaded_ticker_count",
         "message",
     }
     for item in value:
@@ -305,11 +316,48 @@ def _daily_quality_gate_reasons(metadata: RunMetadata) -> list[str]:
         reasons.append("bars_nonempty_count_lt_80")
     if metadata.latest_bar_date_mismatch_count > 10:
         reasons.append("latest_bar_date_mismatch_count_gt_10")
+        reasons.append(_date_mismatch_classification_reason(metadata))
     elif metadata.latest_bar_date_mismatch_count > 0:
         reasons.append("latest_bar_date_mismatch_count_gt_0")
+        reasons.append(_date_mismatch_classification_reason(metadata))
     if metadata.insufficient_history_count > 5:
         reasons.append("insufficient_history_count_gt_5")
     return reasons
+
+
+def _date_mismatch_classification_reason(metadata: RunMetadata) -> str:
+    if _provider_cache_target_date_miss_count(metadata) > 0 or any(
+        bool(status.get("used_stale_cache")) for status in metadata.market_data_provider_status
+    ):
+        return "stale_provider_cache_target_date_miss_detected"
+    return "market_calendar_or_provider_date_mismatch_detected"
+
+
+def _provider_cache_target_date_miss_count(metadata: RunMetadata) -> int:
+    return sum(_safe_int(status.get("cache_target_date_miss_count")) for status in metadata.market_data_provider_status)
+
+
+def _provider_cache_freshness(metadata: RunMetadata) -> list[dict[str, object]]:
+    cache_keys = {
+        "provider",
+        "role",
+        "target_date",
+        "cache_checked_ticker_count",
+        "cache_found_ticker_count",
+        "cache_hit_ticker_count",
+        "cache_target_date_coverage_count",
+        "cache_target_date_miss_count",
+        "cache_target_date_coverage_ratio",
+        "cache_latest_bar_date_min",
+        "cache_latest_bar_date_max",
+        "cache_target_date_miss_sample",
+        "downloaded_ticker_count",
+    }
+    freshness: list[dict[str, object]] = []
+    for status in metadata.market_data_provider_status:
+        if any(key in status for key in cache_keys - {"provider", "role"}):
+            freshness.append({key: status[key] for key in sorted(cache_keys) if key in status})
+    return freshness
 
 
 def _safe_int(value: object) -> int:
@@ -327,23 +375,33 @@ def _safe_int(value: object) -> int:
 
 def _build_run_observability(metadata: RunMetadata) -> dict[str, object]:
     planned_ticker_count = max(metadata.planned_ticker_count, 1)
+    provider_cache_freshness = _provider_cache_freshness(metadata)
+    provider_cache_target_date_miss_count = _provider_cache_target_date_miss_count(metadata)
     provider_issues = [
         status
         for status in metadata.market_data_provider_status
         if status.get("status") not in {None, "ok", "success"}
         or _safe_int(status.get("failed_ticker_count")) > 0
         or bool(status.get("rate_limited"))
+        or _safe_int(status.get("cache_target_date_miss_count")) > 0
     ]
     return {
         "run_status": metadata.run_status,
         "quality_gate": metadata.quality_gate,
         "quality_gate_reasons": list(metadata.quality_gate_reasons),
+        "target_date": metadata.run_date.isoformat(),
+        "date_mismatch_classification": (
+            _date_mismatch_classification_reason(metadata)
+            if metadata.latest_bar_date_mismatch_count > 0
+            else None
+        ),
         "run_duration_seconds": metadata.run_duration_seconds,
         "failure_counts": {
             "failed_tickers": metadata.failed_ticker_count,
             "latest_bar_date_mismatches": metadata.latest_bar_date_mismatch_count,
             "insufficient_history": metadata.insufficient_history_count,
             "provider_issues": len(provider_issues),
+            "provider_cache_target_date_misses": provider_cache_target_date_miss_count,
         },
         "failure_rates": {
             "failed_ticker_ratio": round(metadata.failed_ticker_count / planned_ticker_count, 4),
@@ -356,6 +414,7 @@ def _build_run_observability(metadata: RunMetadata) -> dict[str, object]:
             "bars_nonempty": metadata.bars_nonempty_count,
             "bars_nonempty_ratio": round(metadata.bars_nonempty_count / planned_ticker_count, 4),
         },
+        "provider_cache_freshness": provider_cache_freshness,
         "provider_issue_summary": provider_issues,
         "data_failure_sample": list(metadata.data_failures[:10]),
         "attention_required": metadata.quality_gate in {"warn", "block"} or metadata.run_status != "success",

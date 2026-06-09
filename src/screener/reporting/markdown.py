@@ -88,6 +88,12 @@ def _provider_status_line(status: dict[str, object]) -> str:
         parts.append("stale_cache")
     elif status.get("used_cache"):
         parts.append("cache")
+    if status.get("target_date"):
+        parts.append(f"target {status['target_date']}")
+    if status.get("cache_latest_bar_date_max"):
+        parts.append(f"cache latest {status['cache_latest_bar_date_max']}")
+    if status.get("cache_target_date_miss_count") is not None:
+        parts.append(f"target misses {status['cache_target_date_miss_count']}")
     if status.get("cooldown_active"):
         parts.append("cooldown")
     if status.get("error_kind"):

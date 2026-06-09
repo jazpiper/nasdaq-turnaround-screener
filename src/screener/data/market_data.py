@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import ipaddress
 import json
 from json import JSONDecodeError
@@ -57,7 +58,7 @@ class MarketDataProviderError(RuntimeError):
 
 
 class MarketDataFetcher(Protocol):
-    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+    def fetch(self, tickers: Iterable[str], *, target_date: date | None = None) -> FetchResult:
         """Fetch normalized daily OHLCV bars for each ticker."""
 
 
@@ -297,7 +298,7 @@ class FinnhubDailyBarFetcher:
         self.response_reader = response_reader or _read_url
         self.lookback_days = lookback_days
 
-    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+    def fetch(self, tickers: Iterable[str], *, target_date: date | None = None) -> FetchResult:
         if not self.api_key:
             raise MarketDataProviderError("Finnhub API key is required")
 
@@ -348,7 +349,7 @@ class FMPDailyBarFetcher:
         self.response_reader = response_reader or _read_url
         self.outputsize = outputsize
 
-    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+    def fetch(self, tickers: Iterable[str], *, target_date: date | None = None) -> FetchResult:
         if not self.api_key:
             raise MarketDataProviderError("FMP API key is required")
 
@@ -411,7 +412,7 @@ class YFinanceDailyBarFetcher:
         self.daily_bar_cache = daily_bar_cache
         self.min_cached_bars = max(min_cached_bars, 1)
 
-    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+    def fetch(self, tickers: Iterable[str], *, target_date: date | None = None) -> FetchResult:
         ticker_list = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
         if not ticker_list:
             status = build_source_status(
@@ -432,8 +433,16 @@ class YFinanceDailyBarFetcher:
         failed_tickers: dict[str, str] = {}
         used_cache = False
         ticker_list_to_download = list(ticker_list)
+        cache_checked_ticker_count = 0
+        cache_found_ticker_count = 0
+        cache_hit_ticker_count = 0
+        cache_target_date_coverage_count = 0
+        cache_target_date_miss_count = 0
+        cache_latest_dates: list[date] = []
+        cache_target_date_miss_sample: list[str] = []
 
         if self.daily_bar_cache is not None:
+            cache_checked_ticker_count = len(ticker_list)
             try:
                 cached = self.daily_bar_cache.read_daily_bars(
                     ticker_list,
@@ -445,9 +454,22 @@ class YFinanceDailyBarFetcher:
                 cached = {}
             for ticker in ticker_list:
                 cached_bars = cached.get(ticker, [])
-                if len(cached_bars) >= self.min_cached_bars:
-                    bars_by_ticker[ticker] = sorted(cached_bars, key=lambda bar: bar.trading_date)
+                sorted_cached_bars = sorted(cached_bars, key=lambda bar: bar.trading_date)
+                if sorted_cached_bars:
+                    cache_found_ticker_count += 1
+                    cache_latest_dates.append(max(bar.trading_date for bar in sorted_cached_bars))
+                covers_target_date = _bars_cover_target_date(sorted_cached_bars, target_date=target_date)
+                if target_date is not None and sorted_cached_bars:
+                    if covers_target_date:
+                        cache_target_date_coverage_count += 1
+                    else:
+                        cache_target_date_miss_count += 1
+                        if len(cache_target_date_miss_sample) < 10:
+                            cache_target_date_miss_sample.append(ticker)
+                if len(sorted_cached_bars) >= self.min_cached_bars and covers_target_date:
+                    bars_by_ticker[ticker] = sorted_cached_bars
                     used_cache = True
+                    cache_hit_ticker_count += 1
             ticker_list_to_download = [ticker for ticker in ticker_list if ticker not in bars_by_ticker]
 
         fetched_bars: dict[str, list[DailyBar]] = {}
@@ -510,6 +532,19 @@ class YFinanceDailyBarFetcher:
             used_cache=used_cache,
             message=next(iter(failed_tickers.values()), None),
         ).as_dict()
+        status.update(
+            _cache_freshness_status(
+                target_date=target_date,
+                cache_checked_ticker_count=cache_checked_ticker_count,
+                cache_found_ticker_count=cache_found_ticker_count,
+                cache_hit_ticker_count=cache_hit_ticker_count,
+                cache_target_date_coverage_count=cache_target_date_coverage_count,
+                cache_target_date_miss_count=cache_target_date_miss_count,
+                cache_latest_dates=cache_latest_dates,
+                cache_target_date_miss_sample=cache_target_date_miss_sample,
+                downloaded_ticker_count=len(fetched_bars),
+            )
+        )
         return FetchResult(bars_by_ticker=bars_by_ticker, failed_tickers=failed_tickers, source_statuses=[status])
 
     def _adjustment_key(self) -> str:
@@ -550,6 +585,42 @@ def _chunked(items: list[str], size: int | None) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
 
 
+def _cache_freshness_status(
+    *,
+    target_date: date | None,
+    cache_checked_ticker_count: int,
+    cache_found_ticker_count: int,
+    cache_hit_ticker_count: int,
+    cache_target_date_coverage_count: int,
+    cache_target_date_miss_count: int,
+    cache_latest_dates: list[date],
+    cache_target_date_miss_sample: list[str],
+    downloaded_ticker_count: int,
+) -> dict[str, object]:
+    if cache_checked_ticker_count == 0 and target_date is None:
+        return {"downloaded_ticker_count": downloaded_ticker_count}
+
+    payload: dict[str, object] = {
+        "cache_checked_ticker_count": cache_checked_ticker_count,
+        "cache_found_ticker_count": cache_found_ticker_count,
+        "cache_hit_ticker_count": cache_hit_ticker_count,
+        "cache_target_date_coverage_count": cache_target_date_coverage_count,
+        "cache_target_date_miss_count": cache_target_date_miss_count,
+        "cache_target_date_miss_sample": list(cache_target_date_miss_sample),
+        "downloaded_ticker_count": downloaded_ticker_count,
+    }
+    if target_date is not None:
+        payload["target_date"] = target_date.isoformat()
+        payload["cache_target_date_coverage_ratio"] = round(
+            cache_target_date_coverage_count / max(cache_checked_ticker_count, 1),
+            4,
+        )
+    if cache_latest_dates:
+        payload["cache_latest_bar_date_min"] = min(cache_latest_dates).isoformat()
+        payload["cache_latest_bar_date_max"] = max(cache_latest_dates).isoformat()
+    return payload
+
+
 class TwelveDataDailyBarFetcher:
     """Fetch daily OHLCV bars from Twelve Data time_series endpoint."""
 
@@ -586,7 +657,7 @@ class TwelveDataDailyBarFetcher:
         self.sleeper = sleeper or time.sleep
         self.resilience_state = resilience_state or DEFAULT_RESILIENCE_STATE
 
-    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+    def fetch(self, tickers: Iterable[str], *, target_date: date | None = None) -> FetchResult:
         if not self.api_key:
             raise MarketDataProviderError("Twelve Data API key is required")
 
@@ -696,6 +767,22 @@ class TwelveDataDailyBarFetcher:
         return (self.provider_name, self.base_url, self.interval)
 
 
+def _fetch_with_optional_target_date(
+    fetcher: MarketDataFetcher,
+    tickers: Iterable[str],
+    *,
+    target_date: date | None,
+) -> FetchResult:
+    if target_date is None:
+        return fetcher.fetch(tickers)
+    signature = inspect.signature(fetcher.fetch)
+    if "target_date" in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+    ):
+        return fetcher.fetch(tickers, target_date=target_date)
+    return fetcher.fetch(tickers)
+
+
 class ResilientMarketDataFetcher:
     """Try providers in order and keep per-source status instead of hiding partial failures."""
 
@@ -706,7 +793,7 @@ class ResilientMarketDataFetcher:
             raise MarketDataProviderError("At least one market data provider is required")
         self.providers = providers
 
-    def fetch(self, tickers: Iterable[str]) -> FetchResult:
+    def fetch(self, tickers: Iterable[str], *, target_date: date | None = None) -> FetchResult:
         remaining = normalize_ticker_list(tickers)
         bars_by_ticker: dict[str, list[DailyBar]] = {}
         final_failures: dict[str, str] = {}
@@ -718,7 +805,7 @@ class ResilientMarketDataFetcher:
             role = "primary" if index == 0 else "fallback"
             attempted = list(remaining)
             try:
-                result = fetcher.fetch(attempted)
+                result = _fetch_with_optional_target_date(fetcher, attempted, target_date=target_date)
             except Exception as exc:
                 message = sanitize_provider_message(exc)
                 result = FetchResult(
@@ -766,6 +853,14 @@ def _with_status_role(status: dict[str, object], *, provider_name: str, role: st
     if payload.get("message"):
         payload["message"] = sanitize_provider_message(payload["message"])
     return payload
+
+
+def _bars_cover_target_date(bars: list[DailyBar], *, target_date: date | None) -> bool:
+    if target_date is None:
+        return True
+    if not bars:
+        return False
+    return max(bar.trading_date for bar in bars) >= target_date
 
 
 def build_market_data_fetcher(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+import inspect
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -7,6 +9,7 @@ import pandas as pd
 
 from screener.config import Settings
 from screener.data import (
+    DailyBar,
     EarningsCalendarProvider,
     FileBackedEarningsCalendarProvider,
     MarketDataFetcher,
@@ -60,33 +63,22 @@ class YFinanceMarketDataProvider:
         self._failures_by_ticker: dict[str, str] = {}
         self._provider_status: list[dict[str, object]] = []
         self._prepared_tickers: tuple[str, ...] = ()
+        self._prepared_run_date: date | None = None
 
     def prepare(self, tickers: list[TickerInput], context: PipelineContext) -> None:
         ticker_symbols = tuple(ticker.ticker for ticker in tickers)
-        if ticker_symbols == self._prepared_tickers:
+        if ticker_symbols == self._prepared_tickers and context.run_date == self._prepared_run_date:
             return
 
-        fetch_result = self.fetcher.fetch(ticker_symbols)
+        fetch_result = _fetch_with_optional_target_date(self.fetcher, ticker_symbols, target_date=context.run_date)
         self._history_by_ticker = {
-            ticker: pd.DataFrame(
-                [
-                    {
-                        "date": bar.trading_date,
-                        "open": bar.open,
-                        "high": bar.high,
-                        "low": bar.low,
-                        "close": bar.close,
-                        "adj_close": bar.adj_close,
-                        "volume": bar.volume,
-                    }
-                    for bar in bars
-                ]
-            )
+            ticker: _bars_to_history_frame(bars, target_date=context.run_date)
             for ticker, bars in fetch_result.bars_by_ticker.items()
         }
         self._failures_by_ticker = dict(fetch_result.failed_tickers)
         self._provider_status = [dict(status) for status in getattr(fetch_result, "source_statuses", [])]
         self._prepared_tickers = ticker_symbols
+        self._prepared_run_date = context.run_date
 
     def fetch_history(self, ticker: TickerInput, context: PipelineContext) -> pd.DataFrame:
         if ticker.ticker in self._failures_by_ticker:
@@ -107,6 +99,38 @@ class YFinanceMarketDataProvider:
     @property
     def provider_status(self) -> list[dict[str, object]]:
         return [dict(status) for status in self._provider_status]
+
+
+def _fetch_with_optional_target_date(
+    fetcher: MarketDataFetcher,
+    tickers: Iterable[str],
+    *,
+    target_date: date,
+) -> Any:
+    signature = inspect.signature(fetcher.fetch)
+    if "target_date" in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()
+    ):
+        return fetcher.fetch(tickers, target_date=target_date)
+    return fetcher.fetch(tickers)
+
+
+def _bars_to_history_frame(bars: list[DailyBar], *, target_date: date) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "date": bar.trading_date,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "adj_close": bar.adj_close,
+                "volume": bar.volume,
+            }
+            for bar in bars
+            if bar.trading_date <= target_date
+        ]
+    )
 
 
 class PreferredIntradaySnapshotMarketDataProvider:

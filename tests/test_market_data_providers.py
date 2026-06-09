@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 from types import ModuleType
+from typing import Any, cast
 import unittest
 from urllib.error import HTTPError
 from unittest import mock
@@ -381,6 +382,180 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(result.source_statuses[1]["role"], "fallback")
         self.assertNotIn("secret-value", json.dumps(result.source_statuses))
 
+    def test_http_fetchers_classify_timeout_unavailable_and_partial_responses_without_secrets(self):
+        def finnhub_reader(url: str) -> str:
+            if "symbol=GOOD" in url:
+                return json.dumps(
+                    {
+                        "s": "ok",
+                        "t": [1713657600],
+                        "o": [189.0],
+                        "h": [193.0],
+                        "l": [188.0],
+                        "c": [192.5],
+                        "v": [1000],
+                    }
+                )
+            raise TimeoutError("request timeout token=secret-value")
+
+        finnhub = FinnhubDailyBarFetcher(api_key="secret", response_reader=finnhub_reader)
+        finnhub_result = finnhub.fetch(["GOOD", "BAD"])
+
+        self.assertEqual(set(finnhub_result.bars_by_ticker), {"GOOD"})
+        self.assertEqual(finnhub_result.failed_tickers["BAD"], "request timeout token=[redacted]")
+        self.assertEqual(finnhub_result.source_statuses[0]["status"], "partial_success")
+        self.assertEqual(finnhub_result.source_statuses[0]["error_kind"], "timeout")
+
+        fmp = FMPDailyBarFetcher(
+            api_key="secret",
+            response_reader=lambda url: (_ for _ in ()).throw(ConnectionError("network unavailable api_key=secret-value")),
+        )
+        fmp_result = fmp.fetch(["BAD"])
+
+        self.assertEqual(fmp_result.bars_by_ticker, {})
+        self.assertEqual(fmp_result.failed_tickers["BAD"], "network unavailable api_key=[redacted]")
+        self.assertEqual(fmp_result.source_statuses[0]["status"], "failed")
+        self.assertEqual(fmp_result.source_statuses[0]["error_kind"], "unavailable")
+        self.assertNotIn("secret-value", json.dumps([finnhub_result.source_statuses, fmp_result.source_statuses]))
+
+    def test_resilient_fetcher_records_provider_order_and_final_failure_reason(self):
+        class FakeFetcher:
+            def __init__(self, response: FetchResult | BaseException) -> None:
+                self.response = response
+                self.calls: list[tuple[str, ...]] = []
+
+            def fetch(self, tickers, *, target_date=None) -> FetchResult:
+                self.calls.append(tuple(tickers))
+                if isinstance(self.response, BaseException):
+                    raise self.response
+                return cast(FetchResult, self.response)
+
+        good_bar = normalize_ohlcv_rows("AAA", [_ohlcv_row()])
+        finnhub = FakeFetcher(
+            FetchResult(
+                bars_by_ticker={},
+                failed_tickers={
+                    "AAA": "HTTP 429 too many requests token=secret-value",
+                    "BBB": "HTTP 429 too many requests token=secret-value",
+                },
+                source_statuses=[
+                    {
+                        "provider": "finnhub",
+                        "status": "rate_limited",
+                        "attempted_ticker_count": 2,
+                        "successful_ticker_count": 0,
+                        "failed_ticker_count": 2,
+                        "error_kind": "rate_limited",
+                        "rate_limited": True,
+                        "message": "HTTP 429 too many requests token=secret-value",
+                    }
+                ],
+            )
+        )
+        twelve_data = FakeFetcher(TimeoutError("timeout reading https://example.com/?apikey=secret-value"))
+        fmp = FakeFetcher(
+            FetchResult(
+                bars_by_ticker={"AAA": good_bar},
+                failed_tickers={"BBB": "network unavailable api_key=secret-value"},
+                source_statuses=[
+                    {
+                        "provider": "fmp",
+                        "status": "partial_success",
+                        "attempted_ticker_count": 2,
+                        "successful_ticker_count": 1,
+                        "failed_ticker_count": 1,
+                        "error_kind": "unavailable",
+                        "message": "network unavailable api_key=secret-value",
+                    }
+                ],
+            )
+        )
+        yfinance = FakeFetcher(
+            FetchResult(
+                bars_by_ticker={},
+                failed_tickers={"BBB": "No price rows returned from yfinance"},
+                source_statuses=[
+                    {
+                        "provider": "yfinance",
+                        "status": "failed",
+                        "attempted_ticker_count": 1,
+                        "successful_ticker_count": 0,
+                        "failed_ticker_count": 1,
+                        "error_kind": "provider_error",
+                        "message": "No price rows returned from yfinance",
+                    }
+                ],
+            )
+        )
+
+        result = ResilientMarketDataFetcher(
+            [("finnhub", finnhub), ("twelve-data", twelve_data), ("fmp", fmp), ("yfinance", yfinance)]
+        ).fetch(["AAA", "BBB"])
+
+        self.assertEqual(finnhub.calls, [("AAA", "BBB")])
+        self.assertEqual(twelve_data.calls, [("AAA", "BBB")])
+        self.assertEqual(fmp.calls, [("AAA", "BBB")])
+        self.assertEqual(yfinance.calls, [("BBB",)])
+        self.assertEqual(set(result.bars_by_ticker), {"AAA"})
+        self.assertEqual(result.failed_tickers, {"BBB": "No price rows returned from yfinance"})
+        self.assertEqual([status["provider"] for status in result.source_statuses], ["finnhub", "twelve-data", "fmp", "yfinance"])
+        self.assertEqual([status["role"] for status in result.source_statuses], ["primary", "fallback", "fallback", "fallback"])
+        self.assertEqual(
+            [status.get("error_kind") for status in result.source_statuses],
+            ["rate_limited", "timeout", "unavailable", "provider_error"],
+        )
+        self.assertEqual(result.source_statuses[0]["fallback_provider"], "twelve-data")
+        self.assertNotIn("secret-value", json.dumps([result.failed_tickers, result.source_statuses]))
+        self.assertIn("[redacted_query]", json.dumps(result.source_statuses))
+
+    def test_resilient_fetcher_supports_legacy_and_target_date_fetchers(self):
+        class LegacyFetcher:
+            def __init__(self, result):
+                self.result = result
+                self.calls: list[tuple[str, ...]] = []
+
+            def fetch(self, tickers):
+                self.calls.append(tuple(tickers))
+                return self.result
+
+        class TargetDateFetcher:
+            def __init__(self, result):
+                self.result = result
+                self.calls: list[tuple[tuple[str, ...], date | None]] = []
+
+            def fetch(self, tickers, *, target_date=None):
+                self.calls.append((tuple(tickers), target_date))
+                return self.result
+
+        good_bar = normalize_ohlcv_rows("GOOD", [_ohlcv_row()])
+        bad_bar = normalize_ohlcv_rows("BAD", [_ohlcv_row(close="22")])
+        primary = LegacyFetcher(
+            FetchResult(
+                bars_by_ticker={"GOOD": good_bar},
+                failed_tickers={"BAD": "missing"},
+                source_statuses=[{"provider": "legacy", "status": "partial_success"}],
+            )
+        )
+        fallback = TargetDateFetcher(
+            FetchResult(
+                bars_by_ticker={"BAD": bad_bar},
+                failed_tickers={},
+                source_statuses=[{"provider": "target", "status": "ok"}],
+            )
+        )
+
+        result = ResilientMarketDataFetcher(
+            [("legacy", cast(Any, primary)), ("target", cast(Any, fallback))]
+        ).fetch(
+            ["GOOD", "BAD"],
+            target_date=date(2026, 4, 22),
+        )
+
+        self.assertEqual(primary.calls, [("GOOD", "BAD")])
+        self.assertEqual(fallback.calls, [(("BAD",), date(2026, 4, 22))])
+        self.assertEqual(result.failed_tickers, {})
+        self.assertEqual(set(result.bars_by_ticker), {"GOOD", "BAD"})
+
     def test_finnhub_fetcher_normalizes_mocked_response(self):
         payload = json.dumps(
             {
@@ -631,6 +806,78 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertIn("BBB", result.bars_by_ticker)
         self.assertEqual(set(cache.upserts[0]), {"BBB"})
         self.assertTrue(result.source_statuses[0]["used_cache"])
+        self.assertEqual(result.source_statuses[0]["cache_checked_ticker_count"], 2)
+        self.assertEqual(result.source_statuses[0]["cache_found_ticker_count"], 1)
+        self.assertEqual(result.source_statuses[0]["cache_hit_ticker_count"], 1)
+        self.assertEqual(result.source_statuses[0]["downloaded_ticker_count"], 1)
+        self.assertEqual(result.source_statuses[0]["cache_latest_bar_date_max"], "2026-04-21")
+
+    def test_yfinance_fetcher_refreshes_cache_that_does_not_cover_target_date(self):
+        calls: list[dict[str, object]] = []
+        cached_bar = DailyBar(
+            ticker="AAA",
+            trading_date=date(2026, 4, 21),
+            open=10.0,
+            high=11.0,
+            low=9.0,
+            close=10.5,
+            adj_close=10.5,
+            volume=1000,
+        )
+
+        class FakeCache:
+            def __init__(self) -> None:
+                self.upserts: list[dict[str, list[DailyBar]]] = []
+
+            def read_daily_bars(self, tickers, *, provider, interval, adjustment):
+                return {"AAA": [cached_bar]}
+
+            def upsert_daily_bars(self, bars_by_ticker, *, provider, interval, adjustment):
+                self.upserts.append(dict(bars_by_ticker))
+
+        def frame_for(tickers: list[str]) -> pd.DataFrame:
+            index = pd.Index([pd.Timestamp("2026-04-22")], name="Date")
+            columns = pd.MultiIndex.from_product(
+                [tickers, ["Open", "High", "Low", "Close", "Adj Close", "Volume"]],
+                names=["Ticker", "Price"],
+            )
+            return pd.DataFrame([[20, 21, 19, 20.5, 20.5, 2_000]], index=index, columns=columns)
+
+        fake_yfinance = ModuleType("yfinance")
+
+        def download(**kwargs):
+            calls.append(kwargs)
+            return frame_for(list(kwargs["tickers"]))
+
+        setattr(fake_yfinance, "download", download)
+
+        cache = FakeCache()
+        original_module = sys.modules.get("yfinance")
+        sys.modules["yfinance"] = fake_yfinance
+        try:
+            fetcher = YFinanceDailyBarFetcher(batch_size=1, daily_bar_cache=cache)
+            result = fetcher.fetch(["AAA"], target_date=date(2026, 4, 22))
+        finally:
+            if original_module is None:
+                sys.modules.pop("yfinance", None)
+            else:
+                sys.modules["yfinance"] = original_module
+
+        self.assertEqual([call["tickers"] for call in calls], [["AAA"]])
+        self.assertEqual(result.bars_by_ticker["AAA"][-1].trading_date, date(2026, 4, 22))
+        self.assertEqual(set(cache.upserts[0]), {"AAA"})
+        self.assertFalse(result.source_statuses[0]["used_cache"])
+        self.assertEqual(result.source_statuses[0]["target_date"], "2026-04-22")
+        self.assertEqual(result.source_statuses[0]["cache_checked_ticker_count"], 1)
+        self.assertEqual(result.source_statuses[0]["cache_found_ticker_count"], 1)
+        self.assertEqual(result.source_statuses[0]["cache_hit_ticker_count"], 0)
+        self.assertEqual(result.source_statuses[0]["cache_target_date_coverage_count"], 0)
+        self.assertEqual(result.source_statuses[0]["cache_target_date_miss_count"], 1)
+        self.assertEqual(result.source_statuses[0]["cache_target_date_coverage_ratio"], 0.0)
+        self.assertEqual(result.source_statuses[0]["cache_latest_bar_date_min"], "2026-04-21")
+        self.assertEqual(result.source_statuses[0]["cache_latest_bar_date_max"], "2026-04-21")
+        self.assertEqual(result.source_statuses[0]["cache_target_date_miss_sample"], ["AAA"])
+        self.assertEqual(result.source_statuses[0]["downloaded_ticker_count"], 1)
 
     def test_load_openclaw_secrets_reads_nested_values(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

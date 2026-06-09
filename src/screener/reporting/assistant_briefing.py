@@ -351,6 +351,17 @@ def _sanitize_provider_statuses(value: Any) -> list[dict[str, Any]]:
         "used_stale_cache",
         "cooldown_active",
         "fallback_provider",
+        "target_date",
+        "cache_checked_ticker_count",
+        "cache_found_ticker_count",
+        "cache_hit_ticker_count",
+        "cache_target_date_coverage_count",
+        "cache_target_date_miss_count",
+        "cache_target_date_coverage_ratio",
+        "cache_latest_bar_date_min",
+        "cache_latest_bar_date_max",
+        "cache_target_date_miss_sample",
+        "downloaded_ticker_count",
     }
     sanitized: list[dict[str, Any]] = []
     for item in value:
@@ -492,6 +503,12 @@ def _format_provider_status(status: Any) -> str:
         parts.append("cache=stale")
     elif status.get("used_cache"):
         parts.append("cache=hit")
+    if status.get("target_date"):
+        parts.append(f"target_date={status['target_date']}")
+    if status.get("cache_latest_bar_date_max"):
+        parts.append(f"cache_latest={status['cache_latest_bar_date_max']}")
+    if status.get("cache_target_date_miss_count") is not None:
+        parts.append(f"cache_target_miss={status['cache_target_date_miss_count']}")
     if status.get("error_kind"):
         parts.append(f"error={status['error_kind']}")
     return " | ".join(parts)

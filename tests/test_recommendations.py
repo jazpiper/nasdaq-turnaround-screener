@@ -4,14 +4,18 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
+
+import pytest
 from typer.testing import CliRunner
 
 from screener.cli.main import app
 from screener.recommendations import (
+    DailyArtifactConsistencyError,
     build_daily_top3_recommendations,
     initialize_recommendation_db,
     summarize_recommendation_outcomes,
     update_recommendation_outcomes,
+    validate_daily_artifact_consistency,
 )
 
 
@@ -90,6 +94,80 @@ def _daily_report(candidates: list[dict[str, object]], *, run_date: str = "2026-
         "data_failures": ["MISS"],
         "candidates": candidates,
     }
+
+
+def _write_latest_daily_artifacts(
+    tmp_path: Path,
+    *,
+    latest_target_date: str,
+    report_date: str,
+    metadata_run_date: str,
+) -> Path:
+    output_root = tmp_path / "output" / "daily"
+    run_dir = output_root / latest_target_date
+    latest_dir = output_root / "latest"
+    run_dir.mkdir(parents=True)
+    latest_dir.symlink_to(run_dir.name, target_is_directory=True)
+    (run_dir / "daily-report.json").write_text(
+        json.dumps(_daily_report([_candidate("AAA", 70, 78)], run_date=report_date)),
+        encoding="utf-8",
+    )
+    (run_dir / "run-metadata.json").write_text(json.dumps({"run_date": metadata_run_date}), encoding="utf-8")
+    return latest_dir / "daily-report.json"
+
+
+def test_latest_daily_artifact_consistency_accepts_matching_dates(tmp_path: Path) -> None:
+    report_path = _write_latest_daily_artifacts(
+        tmp_path,
+        latest_target_date="2026-05-19",
+        report_date="2026-05-19",
+        metadata_run_date="2026-05-19",
+    )
+    daily_report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    validate_daily_artifact_consistency(report_path, daily_report=daily_report)
+
+
+@pytest.mark.parametrize(
+    ("latest_target_date", "report_date", "metadata_run_date", "expected_error"),
+    [
+        (
+            "2026-05-08",
+            "2026-05-19",
+            "2026-05-19",
+            "latest_target!=daily-report.date:2026-05-08!=2026-05-19",
+        ),
+        (
+            "2026-05-19",
+            "2026-05-19",
+            "2026-05-08",
+            "daily-report.date!=run-metadata.run_date:2026-05-19!=2026-05-08",
+        ),
+        (
+            "2026-05-08",
+            "2026-05-08",
+            "2026-05-19",
+            "latest_target!=run-metadata.run_date:2026-05-08!=2026-05-19",
+        ),
+    ],
+)
+def test_latest_daily_artifact_consistency_rejects_date_mismatches(
+    tmp_path: Path,
+    latest_target_date: str,
+    report_date: str,
+    metadata_run_date: str,
+    expected_error: str,
+) -> None:
+    report_path = _write_latest_daily_artifacts(
+        tmp_path,
+        latest_target_date=latest_target_date,
+        report_date=report_date,
+        metadata_run_date=metadata_run_date,
+    )
+    daily_report = json.loads(report_path.read_text(encoding="utf-8"))
+
+    with pytest.raises(DailyArtifactConsistencyError, match=expected_error):
+        validate_daily_artifact_consistency(report_path, daily_report=daily_report)
 
 
 def test_build_daily_top3_recommendations_persists_snapshot_and_artifacts(tmp_path: Path) -> None:
@@ -331,6 +409,7 @@ def test_cli_build_daily_top3_recommendations_fails_on_latest_date_mismatch(tmp_
 
     assert result.exit_code == 1
     assert "Daily artifact consistency check failed:" in result.output
+    assert "daily-report.date!=run-metadata.run_date:2026-05-19!=2026-05-08" in result.output
     assert "latest_target!=daily-report.date:2026-05-08!=2026-05-19" in result.output
 
 

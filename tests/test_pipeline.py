@@ -54,9 +54,11 @@ class StubFetcher:
     def __init__(self, bars_by_ticker, failed_tickers=None):
         self.bars_by_ticker = bars_by_ticker
         self.failed_tickers = failed_tickers or {}
+        self.calls = []
 
-    def fetch(self, tickers):
+    def fetch(self, tickers, *, target_date=None):
         requested = tuple(tickers)
+        self.calls.append((requested, target_date))
         return type(
             "FetchResult",
             (),
@@ -91,6 +93,40 @@ def make_benchmark_provider() -> YFinanceMarketDataProvider:
     return YFinanceMarketDataProvider(
         fetcher=StubFetcher({"QQQ": make_bars_from_history("QQQ", make_history(start_close=500.0, decline_step=0.2))})
     )
+
+
+def test_yfinance_market_data_provider_truncates_history_to_context_run_date() -> None:
+    history = pd.DataFrame(
+        [
+            {"date": date(2026, 6, 4), "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5, "adj_close": 10.5, "volume": 1000.0},
+            {"date": date(2026, 6, 5), "open": 11.0, "high": 12.0, "low": 10.0, "close": 11.5, "adj_close": 11.5, "volume": 1100.0},
+            {"date": date(2026, 6, 8), "open": 12.0, "high": 13.0, "low": 11.0, "close": 12.5, "adj_close": 12.5, "volume": 1200.0},
+        ]
+    )
+    provider = YFinanceMarketDataProvider(fetcher=StubFetcher({"AAPL": make_bars_from_history("AAPL", history)}))
+    context = build_context(run_date=date(2026, 6, 5), dry_run=True)
+
+    provider.prepare([TickerInput(ticker="AAPL")], context)
+    fetched = provider.fetch_history(TickerInput(ticker="AAPL"), context)
+
+    assert list(fetched["date"]) == [date(2026, 6, 4), date(2026, 6, 5)]
+
+
+def test_yfinance_market_data_provider_reprepares_for_new_run_date() -> None:
+    history = pd.DataFrame(
+        [
+            {"date": date(2026, 6, 4), "open": 10.0, "high": 11.0, "low": 9.0, "close": 10.5, "adj_close": 10.5, "volume": 1000.0},
+            {"date": date(2026, 6, 5), "open": 11.0, "high": 12.0, "low": 10.0, "close": 11.5, "adj_close": 11.5, "volume": 1100.0},
+        ]
+    )
+    fetcher = StubFetcher({"AAPL": make_bars_from_history("AAPL", history)})
+    provider = YFinanceMarketDataProvider(fetcher=fetcher)
+    ticker = TickerInput(ticker="AAPL")
+
+    provider.prepare([ticker], build_context(run_date=date(2026, 6, 4), dry_run=True))
+    provider.prepare([ticker], build_context(run_date=date(2026, 6, 5), dry_run=True))
+
+    assert fetcher.calls == [(("AAPL",), date(2026, 6, 4)), (("AAPL",), date(2026, 6, 5))]
 
 
 class StubUniverseProvider:
@@ -603,8 +639,11 @@ def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
     assert result.metadata.quality_gate == "block"
     assert "bars_nonempty_count_lt_80" in result.metadata.quality_gate_reasons
     assert "latest_bar_date_mismatch_count_gt_0" in result.metadata.quality_gate_reasons
+    assert "market_calendar_or_provider_date_mismatch_detected" in result.metadata.quality_gate_reasons
     assert result.metadata.observability["quality_gate"] == "block"
     assert result.metadata.observability["attention_required"] is True
+    assert result.metadata.observability["target_date"] == "2026-04-21"
+    assert result.metadata.observability["date_mismatch_classification"] == "market_calendar_or_provider_date_mismatch_detected"
     failure_rates = result.metadata.observability["failure_rates"]
     data_coverage = result.metadata.observability["data_coverage"]
     assert isinstance(failure_rates, dict)
@@ -613,6 +652,80 @@ def test_pipeline_dry_run_skips_writes(tmp_path: Path) -> None:
     assert data_coverage["bars_nonempty_ratio"] == 1.0
     assert artifacts.markdown_path is None
     assert not tmp_path.exists() or not any(tmp_path.iterdir())
+
+
+def test_pipeline_observability_distinguishes_stale_provider_cache_from_calendar_mismatch(tmp_path: Path) -> None:
+    class _StaleCacheProvider:
+        failures = {}
+        provider_status = [
+            {
+                "provider": "yfinance",
+                "role": "primary",
+                "status": "ok",
+                "attempted_ticker_count": 2,
+                "successful_ticker_count": 2,
+                "failed_ticker_count": 0,
+                "used_cache": False,
+                "target_date": "2026-06-05",
+                "cache_checked_ticker_count": 2,
+                "cache_found_ticker_count": 2,
+                "cache_hit_ticker_count": 0,
+                "cache_target_date_coverage_count": 0,
+                "cache_target_date_miss_count": 2,
+                "cache_target_date_coverage_ratio": 0.0,
+                "cache_latest_bar_date_min": "2026-05-22",
+                "cache_latest_bar_date_max": "2026-05-22",
+                "cache_target_date_miss_sample": ["AAPL", "MSFT"],
+                "downloaded_ticker_count": 2,
+            }
+        ]
+
+        def prepare(self, tickers, context):
+            return None
+
+        def fetch_history(self, ticker, context):
+            return make_history(start_close=180.0, days=90)
+
+    pipeline = ScreenPipeline(
+        settings=Settings(output_dir=tmp_path),
+        universe_provider=type(
+            "TwoTickerUniverse",
+            (),
+            {"load_universe": lambda self, context: [TickerInput(ticker="AAPL"), TickerInput(ticker="MSFT")]},
+        )(),
+        market_data_provider=_StaleCacheProvider(),
+        indicator_engine=TechnicalIndicatorEngine(),
+        candidate_scorer=RankedCandidateScorer(),
+        earnings_calendar_provider=None,
+        benchmark_market_data_provider=make_benchmark_provider(),
+    )
+    context = build_context(run_date=date(2026, 6, 5), dry_run=True, output_dir=tmp_path)
+
+    result, _ = pipeline.run(context)
+
+    assert result.metadata.latest_bar_date_mismatch_count == 2
+    assert "latest_bar_date_mismatch_count_gt_0" in result.metadata.quality_gate_reasons
+    assert "stale_provider_cache_target_date_miss_detected" in result.metadata.quality_gate_reasons
+    freshness = result.metadata.observability["provider_cache_freshness"]
+    assert freshness == [
+        {
+            "cache_checked_ticker_count": 2,
+            "cache_found_ticker_count": 2,
+            "cache_hit_ticker_count": 0,
+            "cache_latest_bar_date_max": "2026-05-22",
+            "cache_latest_bar_date_min": "2026-05-22",
+            "cache_target_date_coverage_count": 0,
+            "cache_target_date_coverage_ratio": 0.0,
+            "cache_target_date_miss_count": 2,
+            "cache_target_date_miss_sample": ["AAPL", "MSFT"],
+            "downloaded_ticker_count": 2,
+            "provider": "yfinance",
+            "role": "primary",
+            "target_date": "2026-06-05",
+        }
+    ]
+    assert result.metadata.observability["failure_counts"]["provider_cache_target_date_misses"] == 2
+    assert result.metadata.observability["date_mismatch_classification"] == "stale_provider_cache_target_date_miss_detected"
 
 
 def test_indicator_engine_includes_weekly_context_and_penalty() -> None:
