@@ -28,6 +28,47 @@ def load_daily_report(report_path: Path) -> dict[str, Any]:
     return json.loads(report_path.read_text(encoding="utf-8"))
 
 
+def load_user_universe_contract(path: Path) -> dict[str, dict[str, Any]]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"User universe config must be a JSON object: {path}")
+
+    priority_order = raw.get("coverage_policy", {}).get("priority_order") or [
+        "holdings",
+        "focus_watchlist",
+        "big_tech_p1",
+        "big_tech_p2",
+    ]
+    if not isinstance(priority_order, list):
+        raise ValueError(f"coverage_policy.priority_order must be a list: {path}")
+
+    contract: dict[str, dict[str, Any]] = {}
+    for priority, lane in enumerate(priority_order):
+        lane_name = str(lane).strip()
+        if not lane_name:
+            continue
+        lane_items = raw.get(lane_name, [])
+        if lane_name == "holdings":
+            tickers = [item.get("ticker") for item in lane_items if isinstance(item, dict)]
+        elif isinstance(lane_items, list):
+            tickers = lane_items
+        else:
+            raise ValueError(f"{lane_name} must be a list in user universe config: {path}")
+
+        for ticker in _dedupe_tickers(str(item).strip() for item in tickers if str(item).strip()):
+            existing = contract.get(ticker)
+            if existing is not None and int(existing.get("priority", 9999)) <= priority:
+                continue
+            contract[ticker] = {
+                "tracking_lane": lane_name,
+                "priority": priority,
+                "briefing_section": "holdings" if lane_name == "holdings" else "watchlist",
+                "briefing_label_family": "holding" if lane_name == "holdings" else "watchlist",
+            }
+
+    return contract
+
+
 def _build_source_contract(
     daily_report: dict[str, Any],
     data_quality: dict[str, Any],
@@ -64,6 +105,8 @@ def build_assistant_briefing_payload(
     top_candidate_count: int = 5,
     generated_at: datetime,
     source_report_path: Path | None = None,
+    tracked_ticker_contract: dict[str, dict[str, Any]] | None = None,
+    previous_top3_feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     data_quality = _build_data_quality(daily_report)
     candidate_rows = list(daily_report.get("candidates", []))
@@ -72,6 +115,9 @@ def build_assistant_briefing_payload(
     planned_tickers = {str(ticker).upper() for ticker in daily_report.get("planned_tickers", [])}
     data_failures_by_ticker = _parse_data_failures(daily_report.get("data_failures", []))
     source_contract = _build_source_contract(daily_report, data_quality, source_report_path)
+    tracked_contract = tracked_ticker_contract or {}
+    ordered_user_tickers = _dedupe_tickers(user_tickers)
+    user_universe = set(ordered_user_tickers)
 
     payload: dict[str, Any] = {
         "schema_version": 2,
@@ -88,13 +134,14 @@ def build_assistant_briefing_payload(
         "missing_user_tickers": [],
         "top_candidates": [],
         "overlay_candidates": [],
+        "previous_top3_feedback": previous_top3_feedback,
         "notes": [
             "Signals are technical/research signals only and not buy/sell advice.",
             "Treat 관심/검토/보류 as review stages only; valuation, business quality, and catalysts still need separate confirmation before any buy decision.",
         ],
     }
 
-    for ticker in _dedupe_tickers(user_tickers):
+    for ticker in ordered_user_tickers:
         item = _build_user_ticker_item(
             ticker,
             planned_tickers,
@@ -102,20 +149,25 @@ def build_assistant_briefing_payload(
             rank_by_ticker,
             data_failures_by_ticker,
             daily_report,
+            tracked_contract.get(ticker),
         )
         payload["user_tickers"].append(item)
         if not item.get("in_screener_universe"):
             payload["missing_user_tickers"].append({"ticker": ticker, "reason": _missing_reason(ticker)})
 
-    for row in candidate_rows[: max(0, top_candidate_count)]:
+    for row in candidate_rows:
+        ticker = str(row.get("ticker", "")).upper()
+        if ticker in user_universe:
+            continue
         candidate = _compact_candidate(
             row,
-            rank=rank_by_ticker.get(str(row.get("ticker", "")).upper(), 0),
+            rank=rank_by_ticker.get(ticker, 0),
             daily_report=daily_report,
         )
         payload["top_candidates"].append(candidate)
+        if len(payload["top_candidates"]) >= max(0, top_candidate_count):
+            break
 
-    user_universe = {item.get("ticker") for item in payload["user_tickers"]}
     payload["overlay_candidates"] = [
         candidate for candidate in payload["top_candidates"] if candidate.get("ticker") not in user_universe
     ]
@@ -125,13 +177,47 @@ def build_assistant_briefing_payload(
 
 def _build_watchlist_section_lines(payload: dict[str, Any]) -> list[str]:
     lines = [
-        "## Watchlist / Holdings",
+        "## User universe tracking",
         "These are the user’s tracked tickers and are shown separately from discovery candidates.",
         "",
-        "### Watchlist technical signal summary",
+        "### Holdings lane",
     ]
-    for item in payload.get("user_tickers", []):
-        stage = item.get("review_stage") or _format_assistant_stage(item)
+    holdings = [item for item in payload.get("user_tickers", []) if item.get("briefing_section") == "holdings"]
+    watchlist = [item for item in payload.get("user_tickers", []) if item.get("briefing_section") != "holdings"]
+
+    if holdings:
+        for item in holdings:
+            stage = item.get("briefing_label") or item.get("review_stage") or _format_assistant_stage(item)
+            summary = f"- **{item['ticker']}**: {stage} | holding lane"
+            if item.get("is_candidate"):
+                summary += f" | technical candidate rank {item.get('rank')} | score {item.get('score')}"
+                provenance = _format_source_provenance(item.get("source_provenance"))
+                if provenance:
+                    summary += f" | {provenance}"
+                sector_context = _format_sector_relative_context(item)
+                if sector_context:
+                    summary += f" | {sector_context}"
+            elif item.get("data_failure"):
+                summary += f" | data failure: {item.get('data_failure_reason')}"
+            elif not item.get("in_screener_universe"):
+                summary += " | outside screener universe"
+            lines.append(summary)
+            if item.get("briefing_interpretation"):
+                lines.append(f"  - {item['briefing_interpretation']}")
+            if item.get("review_stage_reason"):
+                lines.append(f"  - technical note: {item['review_stage_reason']}")
+            if item.get("is_candidate"):
+                lines.extend(_format_candidate_explanation_lines(item, indent="  - "))
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "### Watchlist / basket lane"])
+    if not watchlist:
+        lines.append("- None")
+        return lines
+
+    for item in watchlist:
+        stage = item.get("briefing_label") or item.get("review_stage") or _format_assistant_stage(item)
         if item.get("is_candidate"):
             summary = (
                 f"- **{item['ticker']}**: {stage} | rank {item.get('rank')} | score {item.get('score')} | "
@@ -197,6 +283,51 @@ def _build_overlay_section_lines(payload: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _build_previous_top3_feedback_section_lines(payload: dict[str, Any]) -> list[str]:
+    raw_feedback = payload.get("previous_top3_feedback")
+    if not isinstance(raw_feedback, dict):
+        return []
+
+    feedback = dict(raw_feedback)
+    lines = ["## Previous Top3 outcome feedback"]
+    if not feedback.get("available"):
+        source_run_date = feedback.get("source_run_date")
+        horizon_label = feedback.get("horizon_label") or "D+1"
+        reason = feedback.get("reason") or "unavailable"
+        prefix = f"Latest prior Top3 run {source_run_date} {horizon_label}" if source_run_date else f"Latest prior Top3 {horizon_label}"
+        lines.append(f"- {prefix}: unavailable ({reason})")
+        return lines
+
+    source_run_date = feedback.get("source_run_date") or "unknown"
+    horizon_label = feedback.get("horizon_label") or "D+1"
+    lines.append(
+        f"- Run date {source_run_date} | horizon {horizon_label} | filled {feedback.get('filled_count', 0)} | "
+        f"no-fill {feedback.get('no_fill_count', 0)} | negative {feedback.get('negative_return_count', 0)}"
+    )
+    for item in feedback.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        heading = f"#{item.get('rank')} {item.get('ticker')}"
+        if item.get("name"):
+            heading += f" ({item['name']})"
+        status = "체결" if item.get("fill_status") == "filled" else "미체결"
+        summary = f"- **{heading}**: {status}"
+        absolute_return_pct = item.get("absolute_return_pct")
+        if absolute_return_pct is not None:
+            summary += f" | return {float(absolute_return_pct):+.2f}%"
+        relative_return_vs_spy_pct = item.get("relative_return_vs_spy_pct")
+        if relative_return_vs_spy_pct is not None:
+            summary += f" | vs SPY {float(relative_return_vs_spy_pct):+.2f}%"
+        if item.get("exit_reason"):
+            summary += f" | exit {item['exit_reason']}"
+        if item.get("warning_flags"):
+            summary += f" | warning {', '.join(str(flag) for flag in item['warning_flags'])}"
+        elif item.get("observation_note"):
+            summary += f" | note {item['observation_note']}"
+        lines.append(summary)
+    return lines
+
+
 def _build_consumer_messaging_section_lines(payload: dict[str, Any]) -> list[str]:
     lines = ["## Notes"]
     lines.extend(f"- {note}" for note in payload.get("notes", []))
@@ -251,6 +382,9 @@ def build_assistant_briefing_markdown(payload: dict[str, Any]) -> str:
         if reliability:
             lines.append(f"- **Reliability label**: {reliability}")
 
+    previous_feedback_lines = _build_previous_top3_feedback_section_lines(payload)
+    if previous_feedback_lines:
+        lines.extend([""] + previous_feedback_lines)
     lines.extend([""] + _build_watchlist_section_lines(payload))
     lines.extend([""] + _build_missing_tickers_section_lines(payload))
     lines.extend([""] + _build_discovery_section_lines(payload))
@@ -534,12 +668,13 @@ def _build_user_ticker_item(
     rank_by_ticker: dict[str, int],
     data_failures_by_ticker: dict[str, str],
     daily_report: dict[str, Any],
+    tracked_contract: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate = candidate_by_ticker.get(ticker)
     data_failure_reason = data_failures_by_ticker.get(ticker)
     data_failure = data_failure_reason is not None
     if candidate is None:
-        return {
+        item = {
             "ticker": ticker,
             "in_screener_universe": ticker in planned_tickers,
             "is_candidate": False,
@@ -559,16 +694,19 @@ def _build_user_ticker_item(
             ),
             "data_failure": data_failure,
             "data_failure_reason": data_failure_reason,
-            "assistant_interpretation": _format_assistant_interpretation({
-                "tier": None,
-                "is_candidate": False,
-                "in_screener_universe": ticker in planned_tickers,
-                "data_failure": data_failure,
-            }),
+            "assistant_interpretation": _format_assistant_interpretation(
+                {
+                    "tier": None,
+                    "is_candidate": False,
+                    "in_screener_universe": ticker in planned_tickers,
+                    "data_failure": data_failure,
+                }
+            ),
         }
+        return {**item, **_tracked_ticker_fields(item, tracked_contract=tracked_contract)}
 
     review_stage = _review_stage_label(str(candidate.get("tier") or None))
-    return {
+    item = {
         **_compact_candidate(candidate, rank=rank_by_ticker[ticker], daily_report=daily_report),
         "in_screener_universe": ticker in planned_tickers,
         "is_candidate": True,
@@ -589,6 +727,68 @@ def _build_user_ticker_item(
             }
         ),
     }
+    return {**item, **_tracked_ticker_fields(item, tracked_contract=tracked_contract)}
+
+
+def _tracked_ticker_fields(item: dict[str, Any], *, tracked_contract: dict[str, Any] | None) -> dict[str, Any]:
+    contract = tracked_contract or {}
+    briefing_section = str(contract.get("briefing_section") or "watchlist")
+    briefing_label_family = str(contract.get("briefing_label_family") or "watchlist")
+    tracking_lane = str(contract.get("tracking_lane") or briefing_section)
+    briefing_label = _briefing_label_for_item(item, family=briefing_label_family)
+    return {
+        "tracking_lane": tracking_lane,
+        "briefing_section": briefing_section,
+        "briefing_label_family": briefing_label_family,
+        "briefing_label": briefing_label,
+        "briefing_interpretation": _briefing_interpretation_for_item(
+            item,
+            family=briefing_label_family,
+            label=briefing_label,
+        ),
+    }
+
+
+def _briefing_label_for_item(item: dict[str, Any], *, family: str) -> str:
+    data_failure = bool(item.get("data_failure"))
+    in_screener_universe = bool(item.get("in_screener_universe"))
+    tier = str(item.get("tier") or "") if item.get("is_candidate") else ""
+
+    if family == "holding":
+        if data_failure:
+            return "일부 점검 필요"
+        if not in_screener_universe:
+            return "정보 부족"
+        if tier == "avoid/high-risk":
+            return "일부 점검 필요"
+        return "모니터"
+
+    if data_failure or not in_screener_universe:
+        return "정보 부족"
+    if tier == "buy-review":
+        return "관심도 상승"
+    if tier == "watchlist":
+        return "관심도 유지"
+    if tier == "avoid/high-risk":
+        return "모니터"
+    return "정보 부족"
+
+
+def _briefing_interpretation_for_item(item: dict[str, Any], *, family: str, label: str) -> str:
+    data_failure = bool(item.get("data_failure"))
+    in_screener_universe = bool(item.get("in_screener_universe"))
+    tier = str(item.get("tier") or "") if item.get("is_candidate") else ""
+
+    if family == "holding":
+        if data_failure:
+            return f"{label}: 스크리너 데이터 실패로 holdings lane에서 추가 점검이 필요합니다"
+        if not in_screener_universe:
+            return f"{label}: 소스 스크리너 유니버스 밖이라 holdings lane에서는 기술 신호를 확정하지 않습니다"
+        if tier == "avoid/high-risk":
+            return f"{label}: 기술 리스크 플래그가 있어 holdings lane에서 점검 우선순위를 올립니다"
+        return f"{label}: 기술 신호는 보조 참고용이며 holdings thesis 영향은 별도 확인이 필요합니다"
+
+    return f"{label}: {_format_assistant_stage_reason(item)}"
 
 
 def _compact_candidate(

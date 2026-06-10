@@ -409,3 +409,87 @@ def test_build_daily_alert_limits_single_candidate_sector_concentration_in_beari
     assert document.summary.suppressed_by_sector_concentration_count == 1
     assert [event.payload["ticker"] for event in document.events] == ["B0", "B1"]
     assert set(next_state.tickers) == {"B0", "B1"}
+
+
+def test_build_daily_alert_reports_conservative_shadow_digest_only_sector_cap() -> None:
+    candidates = [
+        make_candidate(ticker="B0", sector="Technology"),
+        make_watchlist_candidate(ticker="D1", sector="Technology"),
+        make_watchlist_candidate(ticker="D2", sector="Technology"),
+        make_watchlist_candidate(ticker="D3", sector="Technology"),
+    ]
+
+    document, _ = build_daily_alert_document(
+        make_result(candidates, bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context={"qqq_below_20d_ma": True, "qqq_return_20d": -7.0},
+    )
+
+    assert [event.payload["ticker"] for event in document.events if event.event_type == "ticker_alert"] == ["B0"]
+    digest_event = [event for event in document.events if event.event_type == "digest_alert"][0]
+    members = digest_event.payload["members"]
+    assert isinstance(members, list)
+    assert [member["ticker"] for member in members] == ["D1"]
+
+    shadow = document.summary.conservative_shadow
+    assert shadow is not None
+    assert shadow["individual_event_count"] == 1
+    assert shadow["digest_event_count"] == 1
+    assert shadow["eligible_candidate_count"] == 3
+    assert shadow["suppressed_by_sector_concentration_count"] == 1
+    assert shadow["sector_concentration_gate"] == "capped"
+    assert shadow["emitted_event_count_delta"] == 0
+    assert shadow["top5_retention_ratio"] == 1.0
+
+
+def test_build_daily_alert_reports_conservative_shadow_insufficient_sector_signal() -> None:
+    candidates = [
+        make_watchlist_candidate(ticker="S0", sector="Technology"),
+        make_watchlist_candidate(ticker="S1"),
+        make_watchlist_candidate(ticker="S2", sector="Healthcare"),
+    ]
+
+    document, _ = build_daily_alert_document(
+        make_result(candidates, bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context={"qqq_below_20d_ma": True, "qqq_return_20d": -7.0},
+    )
+
+    assert document.summary.sector_signal_populated_count == 2
+    assert document.summary.sector_signal_coverage_ratio == 2 / 3
+    shadow = document.summary.conservative_shadow
+    assert shadow is not None
+    assert shadow["sector_concentration_gate"] == "insufficient_signal"
+    assert shadow["suppressed_by_sector_concentration_count"] == 0
+    assert shadow["eligible_candidate_count"] == 3
+
+
+def test_build_daily_alert_reports_conservative_shadow_insufficient_correlation_signal() -> None:
+    candidates = [
+        make_watchlist_candidate(ticker="C0", correlation_group="mega-cap-ai"),
+        make_watchlist_candidate(ticker="C1"),
+        make_watchlist_candidate(ticker="C2", correlation_group="software"),
+    ]
+
+    document, _ = build_daily_alert_document(
+        make_result(candidates, bars_nonempty_count=95),
+        state=AlertState(),
+        artifact_directory="output/daily/2026-04-22",
+        report_path="output/daily/2026-04-22/daily-report.json",
+        metadata_path="output/daily/2026-04-22/run-metadata.json",
+        benchmark_context={"qqq_below_20d_ma": True, "qqq_return_20d": -7.0},
+    )
+
+    assert document.summary.correlation_signal_populated_count == 2
+    assert document.summary.correlation_signal_coverage_ratio == 2 / 3
+    shadow = document.summary.conservative_shadow
+    assert shadow is not None
+    assert shadow["correlation_gate"] == "insufficient_signal"
+    assert shadow["suppressed_by_correlation_count"] == 0
+    assert shadow["eligible_candidate_count"] == 3

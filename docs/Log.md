@@ -2,12 +2,36 @@
 project: Nasdaq Turnaround Screener
 type: Log
 related: [Dashboard.md, Handoff.md]
-updated: 2026-05-23
+updated: 2026-06-10
 ---
 
 # 🪵 Nasdaq Turnaround Screener Development Log
 
 Chronological history of major updates, decisions, and milestones in the Nasdaq Turnaround Screener project.
+
+---
+
+### 2026-06-10
+- **Task:** Draft implementation-ready conservative vs aggressive options for the v2 alert quality gate.
+- **Created Document:**
+  - `docs/Archive/2026-06-10-alert-quality-gate-v2-options.md`: compares conservative and aggressive gate behavior across regime, sector concentration, candidate correlation, missing-signal handling, and expected alert-volume impact.
+- **Key Decision Framing:**
+  - Conservative option keeps regime gating fail-open on missing benchmark context and limits sector/correlation caps to bearish digest flow when signal coverage is sufficient.
+  - Aggressive option treats missing regime as defensive, extends concentration caps to single + digest alerts, and uses unknown buckets for missing sector/correlation labels.
+- **Verification:**
+  - Reviewed current `alerts/policy.py`, `alerts/builder.py`, `tests/test_alert_policy.py`, and `tests/test_alert_builder.py` to ground the options in live policy constants and fixture coverage.
+
+- **Task:** Outline test strategy, acceptance criteria, and rollback points for a future alert quality gate change.
+- **Created Document:**
+  - `docs/Archive/2026-06-10-alert-quality-gate-v2-test-rollout-plan.md`: defines unit/fixture/contract coverage, conservative/aggressive acceptance criteria, rollout sequencing, and rollback criteria for under-delivery or schema/entrypoint regressions.
+- **Decision Gate:**
+  - No production threshold change should happen until the user decides whether to prioritize alert noise reduction or avoiding missed high-quality candidates.
+
+- **Task:** Assemble user-decision follow-up spec for Alert Quality Gate v2.
+- **Created Document:**
+  - `docs/Archive/2026-06-10-alert-quality-gate-v2-user-decision-spec.md`: ready-to-share policy-selection spec with the recommended Conservative-first path, Conservative vs Aggressive gates, explicit user decision, hold condition, and follow-up child card outline.
+- **Implementation Hold:**
+  - Implementation remains on hold until the user selects whether to prioritize avoiding missed candidates or reducing alert noise/concentration.
 
 ---
 

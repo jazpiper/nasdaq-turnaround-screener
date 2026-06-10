@@ -12,9 +12,21 @@ from screener.reporting.assistant_briefing import (
     _build_watchlist_section_lines,
     build_assistant_briefing_markdown,
     build_assistant_briefing_payload,
+    load_user_universe_contract,
     parse_user_tickers,
     write_assistant_briefing,
 )
+
+
+def sample_user_universe_contract() -> dict[str, dict[str, object]]:
+    return {
+        "TSLA": {"tracking_lane": "holdings", "briefing_section": "holdings", "briefing_label_family": "holding"},
+        "INFQ": {"tracking_lane": "holdings", "briefing_section": "holdings", "briefing_label_family": "holding"},
+        "PLTR": {"tracking_lane": "holdings", "briefing_section": "holdings", "briefing_label_family": "holding"},
+        "RKLB": {"tracking_lane": "focus_watchlist", "briefing_section": "watchlist", "briefing_label_family": "watchlist"},
+        "GOOGL": {"tracking_lane": "focus_watchlist", "briefing_section": "watchlist", "briefing_label_family": "watchlist"},
+        "NVDA": {"tracking_lane": "big_tech_p1", "briefing_section": "watchlist", "briefing_label_family": "watchlist"},
+    }
 
 
 def sample_daily_report() -> dict:
@@ -78,6 +90,7 @@ def test_briefing_payload_summarizes_user_tickers_missing_entries_and_top_candid
         top_candidate_count=1,
         generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
         source_report_path=Path("output/daily/latest/daily-report.json"),
+        tracked_ticker_contract=sample_user_universe_contract(),
     )
 
     assert payload["schema_version"] == 2
@@ -128,6 +141,9 @@ def test_briefing_payload_summarizes_user_tickers_missing_entries_and_top_candid
     assert user_by_ticker["TSLA"]["in_screener_universe"] is True
     assert user_by_ticker["TSLA"]["is_candidate"] is False
     assert user_by_ticker["TSLA"]["review_stage"] == "보류"
+    assert user_by_ticker["TSLA"]["briefing_section"] == "holdings"
+    assert user_by_ticker["TSLA"]["briefing_label_family"] == "holding"
+    assert user_by_ticker["TSLA"]["briefing_label"] == "모니터"
     assert user_by_ticker["TSLA"]["assistant_interpretation"] == "보류: 추가 확인이 필요합니다"
 
     assert user_by_ticker["PLTR"]["in_screener_universe"] is True
@@ -137,6 +153,10 @@ def test_briefing_payload_summarizes_user_tickers_missing_entries_and_top_candid
     assert user_by_ticker["PLTR"]["risk_adjusted_score"] == 69
     assert user_by_ticker["PLTR"]["tier"] == "watchlist"
     assert user_by_ticker["PLTR"]["review_stage"] == "관심"
+    assert user_by_ticker["PLTR"]["briefing_section"] == "holdings"
+    assert user_by_ticker["PLTR"]["briefing_label_family"] == "holding"
+    assert user_by_ticker["PLTR"]["briefing_label"] == "모니터"
+    assert user_by_ticker["PLTR"]["briefing_interpretation"] == "모니터: 기술 신호는 보조 참고용이며 holdings thesis 영향은 별도 확인이 필요합니다"
     assert user_by_ticker["PLTR"]["assistant_interpretation"] == "관심: 기술 신호는 있으나 아직 검토 전 단계입니다"
     assert user_by_ticker["PLTR"]["risk_flags"] == ["시장/섹터 맥락 확인이 필요함"]
     assert user_by_ticker["PLTR"]["why_not_buy_review_qualified"] == "기술 신호는 있으나 아직 검토 전 단계입니다"
@@ -199,6 +219,7 @@ def test_briefing_payload_includes_candidate_source_provenance_and_freshness() -
         user_tickers=["PLTR"],
         top_candidate_count=2,
         generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
+        tracked_ticker_contract=sample_user_universe_contract(),
     )
     markdown = build_assistant_briefing_markdown(payload)
 
@@ -209,8 +230,7 @@ def test_briefing_payload_includes_candidate_source_provenance_and_freshness() -
         "source_timestamp": "2026-04-30",
         "freshness_label": "official recent",
     }
-    assert top_by_ticker["PLTR"]["source_provenance"]["source_type"] == "IR release"
-    assert top_by_ticker["PLTR"]["source_provenance"]["freshness_label"] == "official same-day"
+    assert "PLTR" not in top_by_ticker
 
     user_by_ticker = {item["ticker"]: item for item in payload["user_tickers"]}
     assert user_by_ticker["PLTR"]["source_provenance"]["source_name"] == "Q1 earnings release"
@@ -226,6 +246,27 @@ def test_briefing_sections_are_split_by_audience() -> None:
         user_tickers=["TSLA", "PLTR"],
         top_candidate_count=1,
         generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
+        tracked_ticker_contract=sample_user_universe_contract(),
+        previous_top3_feedback={
+            "available": True,
+            "source_run_date": "2026-04-30",
+            "horizon_label": "D+1",
+            "filled_count": 1,
+            "no_fill_count": 0,
+            "negative_return_count": 1,
+            "items": [
+                {
+                    "rank": 1,
+                    "ticker": "AAPL",
+                    "name": "Apple Inc.",
+                    "fill_status": "filled",
+                    "absolute_return_pct": -1.25,
+                    "relative_return_vs_spy_pct": -0.8,
+                    "exit_reason": "horizon_close",
+                    "warning_flags": ["손실", "SPY 미만"],
+                }
+            ],
+        },
     )
 
     watchlist_lines = _build_watchlist_section_lines(payload)
@@ -233,12 +274,17 @@ def test_briefing_sections_are_split_by_audience() -> None:
     notes_lines = _build_consumer_messaging_section_lines(payload)
     markdown = build_assistant_briefing_markdown(payload)
 
-    assert watchlist_lines[0] == "## Watchlist / Holdings"
+    assert watchlist_lines[0] == "## User universe tracking"
+    assert "### Holdings lane" in watchlist_lines
+    assert "### Watchlist / basket lane" in watchlist_lines
     assert discovery_lines[0] == "## New discovery candidates"
     assert notes_lines[0] == "## Notes"
-    assert any(line.startswith("- **PLTR**") for line in watchlist_lines)
+    assert any(line.startswith("- **PLTR**: 모니터 | holding lane") for line in watchlist_lines)
     assert any(line.startswith("- **#1 GEHC") for line in discovery_lines)
-    assert markdown.index("## Watchlist / Holdings") < markdown.index("## New discovery candidates")
+    assert "## Previous Top3 outcome feedback" in markdown
+    assert "- **#1 AAPL (Apple Inc.)**: 체결 | return -1.25% | vs SPY -0.80% | exit horizon_close | warning 손실, SPY 미만" in markdown
+    assert markdown.index("## Previous Top3 outcome feedback") < markdown.index("## User universe tracking")
+    assert markdown.index("## User universe tracking") < markdown.index("## New discovery candidates")
     assert markdown.index("## New discovery candidates") < markdown.index("## Notes")
 
 
@@ -287,7 +333,7 @@ def test_briefing_payload_adds_sector_relative_context_and_setup_classification(
         generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
     )
     markdown = build_assistant_briefing_markdown(payload)
-    candidate = payload["top_candidates"][0]
+    candidate = payload["user_tickers"][0]
 
     assert candidate["sector"] == "health_care"
     assert candidate["industry"] == "Medical Devices"
@@ -375,6 +421,7 @@ def test_markdown_briefing_includes_required_sections_and_caution() -> None:
         user_tickers=["TSLA", "INFQ", "PLTR", "RKLB", "GOOGL", "NVDA"],
         top_candidate_count=1,
         generated_at=datetime(2026, 5, 2, 12, 0, tzinfo=timezone.utc),
+        tracked_ticker_contract=sample_user_universe_contract(),
     )
 
     markdown = build_assistant_briefing_markdown(payload)
@@ -383,10 +430,11 @@ def test_markdown_briefing_includes_required_sections_and_caution() -> None:
     assert "## Source / freshness / reliability" in markdown
     assert "## Data quality" in markdown
     assert "**Planned ticker count**: 100" in markdown
-    assert "## Watchlist / Holdings" in markdown
-    assert "### Watchlist technical signal summary" in markdown
-    assert "- **TSLA**: 보류" in markdown
-    assert "- **PLTR**: 관심 | rank 2" in markdown
+    assert "## User universe tracking" in markdown
+    assert "### Holdings lane" in markdown
+    assert "### Watchlist / basket lane" in markdown
+    assert "- **TSLA**: 모니터 | holding lane" in markdown
+    assert "- **PLTR**: 모니터 | holding lane | technical candidate rank 2" in markdown
     assert "## Missing tickers / outside universe" in markdown
     assert "INFQ: Not in source screener universe" in markdown
     assert "## New discovery candidates" in markdown
@@ -479,3 +527,26 @@ def test_write_assistant_briefing_accepts_custom_artifact_basename(tmp_path: Pat
 
     assert json_path == tmp_path / "latest-user-watchlist-screener.json"
     assert markdown_path == tmp_path / "latest-user-watchlist-screener.md"
+
+
+def test_load_user_universe_contract_prioritizes_holdings_lane(tmp_path: Path) -> None:
+    path = tmp_path / "us-stocks-universe.json"
+    path.write_text(
+        json.dumps(
+            {
+                "coverage_policy": {"priority_order": ["holdings", "focus_watchlist", "big_tech_p1"]},
+                "holdings": [{"ticker": "PLTR"}, {"ticker": "TSLA"}],
+                "focus_watchlist": ["PLTR", "RKLB"],
+                "big_tech_p1": ["NVDA"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    contract = load_user_universe_contract(path)
+
+    assert contract["PLTR"]["tracking_lane"] == "holdings"
+    assert contract["PLTR"]["briefing_section"] == "holdings"
+    assert contract["PLTR"]["briefing_label_family"] == "holding"
+    assert contract["RKLB"]["tracking_lane"] == "focus_watchlist"
+    assert contract["NVDA"]["tracking_lane"] == "big_tech_p1"

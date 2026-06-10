@@ -262,6 +262,7 @@ def _ensure_recommendation_columns(conn: sqlite3.Connection) -> None:
     if "recommendations" in tables:
         existing = {row[1] for row in conn.execute("pragma table_info(recommendations)")}
         for name, ddl in {
+            "algorithm_version": f"text not null default '{ALGORITHM_VERSION}'",
             "reference_price": "real",
             "buy_limit_price": "real",
             "stop_loss_price": "real",
@@ -273,9 +274,21 @@ def _ensure_recommendation_columns(conn: sqlite3.Connection) -> None:
             "time_stop_date": "text",
             "price_method": "text",
             "price_formula": "text",
+            "source_freshness_json": "text not null default '{}'",
+            "data_quality_json": "text not null default '{}'",
         }.items():
             if name not in existing:
                 conn.execute(f"alter table recommendations add column {name} {ddl}")
+        conn.execute(
+            "update recommendations set algorithm_version = coalesce(nullif(algorithm_version, ''), ?)",
+            (ALGORITHM_VERSION,),
+        )
+        conn.execute(
+            "update recommendations set source_freshness_json = coalesce(nullif(source_freshness_json, ''), '{}')"
+        )
+        conn.execute(
+            "update recommendations set data_quality_json = coalesce(nullif(data_quality_json, ''), '{}')"
+        )
     if "recommendation_outcomes" in tables:
         existing = {row[1] for row in conn.execute("pragma table_info(recommendation_outcomes)")}
         for name, ddl in {
@@ -956,6 +969,162 @@ def _avg(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _feedback_warning_flags(row: sqlite3.Row) -> list[str]:
+    warnings: list[str] = []
+    if row["fill_status"] == "no_fill":
+        warnings.append("미체결")
+    if row["ambiguous_touch"]:
+        warnings.append("target/stop same-candle")
+    if row["stop_hit"]:
+        warnings.append("stop hit")
+    absolute_return_pct = _as_float(row["absolute_return_pct"])
+    if absolute_return_pct is not None and absolute_return_pct < 0:
+        warnings.append("손실")
+    relative_return_vs_spy_pct = _as_float(row["relative_return_vs_spy_pct"])
+    if relative_return_vs_spy_pct is not None and relative_return_vs_spy_pct < 0:
+        warnings.append("SPY 미만")
+    return warnings
+
+
+def load_latest_previous_top3_feedback(*, db_path: Path, screener_date: str | date | None = None) -> dict[str, Any] | None:
+    if not db_path.exists():
+        return None
+
+    current_run_date = _parse_date(screener_date) if screener_date is not None else None
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        run_query = """
+            select rr.run_id, rr.run_date
+            from recommendation_runs rr
+            where (? is null or rr.run_date < ?)
+            order by rr.run_date desc, rr.run_id desc
+            limit 1
+        """
+        run_row = conn.execute(
+            run_query,
+            (
+                current_run_date.isoformat() if current_run_date is not None else None,
+                current_run_date.isoformat() if current_run_date is not None else None,
+            ),
+        ).fetchone()
+        if run_row is None:
+            return {
+                "available": False,
+                "status": "unavailable",
+                "reason": "no_previous_recommendation_run",
+            }
+
+        rows = conn.execute(
+            """
+            select rr.run_id, rr.run_date, r.rank, r.ticker, r.company_name,
+                   o.horizon_label, o.outcome_status, o.fill_status, o.absolute_return_pct,
+                   o.relative_return_vs_spy_pct, o.exit_reason, o.observation_note,
+                   o.target1_hit, o.stop_hit, o.ambiguous_touch
+            from recommendation_runs rr
+            join recommendations r on r.run_id = rr.run_id
+            join recommendation_outcomes o on o.recommendation_id = r.recommendation_id
+            where rr.run_id = ? and o.horizon_days = 1
+            order by r.rank asc, o.outcome_id asc
+            """,
+            (run_row["run_id"],),
+        ).fetchall()
+
+    if not rows:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "reason": "no_d_plus_1_rows",
+            "run_id": run_row["run_id"],
+            "source_run_date": run_row["run_date"],
+        }
+
+    settled_rows = [row for row in rows if row["outcome_status"] in {"settled", "no_fill"}]
+    if not settled_rows:
+        return {
+            "available": False,
+            "status": "unavailable",
+            "reason": "d_plus_1_outcomes_pending",
+            "run_id": run_row["run_id"],
+            "source_run_date": run_row["run_date"],
+            "horizon_label": rows[0]["horizon_label"],
+        }
+
+    items: list[dict[str, Any]] = []
+    for row in settled_rows:
+        items.append(
+            {
+                "rank": int(row["rank"]),
+                "ticker": str(row["ticker"]),
+                "name": row["company_name"],
+                "horizon_label": row["horizon_label"],
+                "outcome_status": str(row["outcome_status"]),
+                "fill_status": str(row["fill_status"] or row["outcome_status"]),
+                "absolute_return_pct": _as_float(row["absolute_return_pct"]),
+                "relative_return_vs_spy_pct": _as_float(row["relative_return_vs_spy_pct"]),
+                "exit_reason": row["exit_reason"],
+                "observation_note": row["observation_note"],
+                "warning_flags": _feedback_warning_flags(row),
+            }
+        )
+
+    return {
+        "available": True,
+        "status": "ok",
+        "run_id": run_row["run_id"],
+        "source_run_date": run_row["run_date"],
+        "horizon_label": settled_rows[0]["horizon_label"],
+        "recommendation_count": len(items),
+        "filled_count": sum(1 for item in items if item["fill_status"] == "filled"),
+        "no_fill_count": sum(1 for item in items if item["fill_status"] == "no_fill"),
+        "negative_return_count": sum(
+            1 for item in items if item["absolute_return_pct"] is not None and item["absolute_return_pct"] < 0
+        ),
+        "items": items,
+    }
+
+
+def _json_loads_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if not value:
+        return {}
+    try:
+        loaded = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return dict(loaded) if isinstance(loaded, dict) else {}
+
+
+def _normalized_label(value: Any, *, default: str = "unknown") -> str:
+    text = str(value).strip() if value is not None else ""
+    return text or default
+
+
+def _summarize_outcome_group(rows: list[sqlite3.Row]) -> dict[str, Any]:
+    sample_size = len(rows)
+    returns = [float(row["absolute_return_pct"]) for row in rows if row["absolute_return_pct"] is not None]
+    rel_spy = [float(row["relative_return_vs_spy_pct"]) for row in rows if row["relative_return_vs_spy_pct"] is not None]
+    rel_qqq = [float(row["relative_return_vs_qqq_pct"]) for row in rows if row["relative_return_vs_qqq_pct"] is not None]
+    r_values = [float(row["r_multiple"]) for row in rows if row["r_multiple"] is not None]
+    drawdowns = [float(row["max_drawdown_pct"]) for row in rows if row["max_drawdown_pct"] is not None]
+    return {
+        "sample_size": sample_size,
+        "hit_rate_pct": _pct(sum(1 for value in returns if value > 0), sample_size),
+        "target1_hit_rate_pct": _pct(sum(1 for row in rows if row["target1_hit"]), sample_size),
+        "stop_hit_rate_pct": _pct(sum(1 for row in rows if row["stop_hit"]), sample_size),
+        "no_fill_rate_pct": _pct(sum(1 for row in rows if row["fill_status"] == "no_fill"), sample_size),
+        "ambiguous_count": sum(1 for row in rows if row["ambiguous_touch"]),
+        "avg_absolute_return_pct": _avg(returns),
+        "median_absolute_return_pct": round(float(median(returns)), 2) if returns else None,
+        "avg_relative_return_vs_spy_pct": _avg(rel_spy),
+        "avg_relative_return_vs_qqq_pct": _avg(rel_qqq),
+        "avg_r_multiple": _avg(r_values),
+        "avg_max_drawdown_pct": _avg(drawdowns),
+        "score_buckets": {},
+        "price_methods": sorted({str(row["price_method"]) for row in rows if row["price_method"]}),
+    }
+
+
 def summarize_recommendation_outcomes(*, db_path: Path, output_path: Path | None = None) -> dict[str, Any]:
     initialize_recommendation_db(db_path)
     with sqlite3.connect(db_path) as conn:
@@ -964,9 +1133,13 @@ def summarize_recommendation_outcomes(*, db_path: Path, output_path: Path | None
             """
             select r.algorithm_version, o.outcome_status, o.absolute_return_pct, o.relative_return_vs_spy_pct,
                    o.relative_return_vs_qqq_pct, o.target1_hit, o.stop_hit, o.ambiguous_touch, o.fill_status,
-                   o.r_multiple, r.risk_adjusted_score, r.price_method
+                   o.r_multiple, o.max_drawdown_pct, r.risk_adjusted_score, r.price_method,
+                   rr.data_quality_label as run_data_quality_label,
+                   rr.reliability_label as run_reliability_label,
+                   r.source_freshness_json, r.data_quality_json
             from recommendation_outcomes o
             join recommendations r on r.recommendation_id = o.recommendation_id
+            join recommendation_runs rr on rr.run_id = r.run_id
             where o.outcome_status in ('settled', 'no_fill')
             order by r.algorithm_version, o.outcome_id
             """
@@ -976,27 +1149,33 @@ def summarize_recommendation_outcomes(*, db_path: Path, output_path: Path | None
         grouped.setdefault(row["algorithm_version"], []).append(row)
     summaries: list[dict[str, Any]] = []
     for version, rows in grouped.items():
-        sample_size = len(rows)
-        returns = [float(row["absolute_return_pct"]) for row in rows if row["absolute_return_pct"] is not None]
-        rel_spy = [float(row["relative_return_vs_spy_pct"]) for row in rows if row["relative_return_vs_spy_pct"] is not None]
-        rel_qqq = [float(row["relative_return_vs_qqq_pct"]) for row in rows if row["relative_return_vs_qqq_pct"] is not None]
-        r_values = [float(row["r_multiple"]) for row in rows if row["r_multiple"] is not None]
-        summaries.append({
-            "algorithm_version": version,
-            "sample_size": sample_size,
-            "hit_rate_pct": _pct(sum(1 for value in returns if value > 0), sample_size),
-            "target1_hit_rate_pct": _pct(sum(1 for row in rows if row["target1_hit"]), sample_size),
-            "stop_hit_rate_pct": _pct(sum(1 for row in rows if row["stop_hit"]), sample_size),
-            "no_fill_rate_pct": _pct(sum(1 for row in rows if row["fill_status"] == "no_fill"), sample_size),
-            "ambiguous_count": sum(1 for row in rows if row["ambiguous_touch"]),
-            "avg_absolute_return_pct": _avg(returns),
-            "median_absolute_return_pct": round(float(median(returns)), 2) if returns else None,
-            "avg_relative_return_vs_spy_pct": _avg(rel_spy),
-            "avg_relative_return_vs_qqq_pct": _avg(rel_qqq),
-            "avg_r_multiple": _avg(r_values),
-            "score_buckets": {},
-            "price_methods": sorted({str(row["price_method"]) for row in rows if row["price_method"]}),
-        })
+        summaries.append({"algorithm_version": version, **_summarize_outcome_group(rows)})
+    quality_grouped: dict[tuple[str, str, str, str, str], list[sqlite3.Row]] = {}
+    for row in versions:
+        freshness = _json_loads_dict(row["source_freshness_json"])
+        quality = _json_loads_dict(row["data_quality_json"])
+        key = (
+            _normalized_label(row["run_data_quality_label"]),
+            _normalized_label(row["run_reliability_label"]),
+            _normalized_label(quality.get("provider_status")),
+            _normalized_label(freshness.get("freshness_label")),
+            _normalized_label(freshness.get("source_provider")),
+        )
+        quality_grouped.setdefault(key, []).append(row)
+    data_quality_groups: list[dict[str, Any]] = []
+    for key, rows in sorted(quality_grouped.items()):
+        run_data_quality_label, run_reliability_label, provider_status, freshness_label, source_provider = key
+        data_quality_groups.append(
+            {
+                "group_key": "|".join(key),
+                "run_data_quality_label": run_data_quality_label,
+                "run_reliability_label": run_reliability_label,
+                "provider_status": provider_status,
+                "freshness_label": freshness_label,
+                "source_provider": source_provider,
+                **_summarize_outcome_group(rows),
+            }
+        )
     suggestions = []
     for item in summaries:
         if item["no_fill_rate_pct"] > 25:
@@ -1005,7 +1184,37 @@ def summarize_recommendation_outcomes(*, db_path: Path, output_path: Path | None
             suggestions.append(f"{item['algorithm_version']}: stop hits exceed target hits; review risk gates and stop distance.")
     if not suggestions:
         suggestions.append("No automatic algorithm changes applied; monitor sample size before changing thresholds.")
-    payload = {"schema_version": 1, "generated_at": _iso_now(), "algorithm_versions": summaries, "improvement_suggestions": suggestions}
+    comparison_metrics = [
+        "sample_size",
+        "hit_rate_pct",
+        "target1_hit_rate_pct",
+        "stop_hit_rate_pct",
+        "no_fill_rate_pct",
+        "avg_absolute_return_pct",
+        "median_absolute_return_pct",
+        "avg_relative_return_vs_spy_pct",
+        "avg_relative_return_vs_qqq_pct",
+        "avg_r_multiple",
+        "avg_max_drawdown_pct",
+    ]
+    payload = {
+        "schema_version": 1,
+        "generated_at": _iso_now(),
+        "algorithm_versions": summaries,
+        "data_quality_groups": data_quality_groups,
+        "drift_comparison_fields": {
+            "algorithm_versions": comparison_metrics,
+            "data_quality_groups": comparison_metrics,
+            "group_dimensions": [
+                "run_data_quality_label",
+                "run_reliability_label",
+                "provider_status",
+                "freshness_label",
+                "source_provider",
+            ],
+        },
+        "improvement_suggestions": suggestions,
+    }
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(_json_dumps(payload) + "\n", encoding="utf-8")

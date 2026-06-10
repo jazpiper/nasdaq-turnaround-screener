@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -52,6 +53,32 @@ def run(command: list[str]) -> None:
     subprocess.run(command, cwd=PROJECT_ROOT, env=env, check=True)
 
 
+def _artifact_mtimes(report_path: Path) -> tuple[int | None, int | None]:
+    metadata_path = report_path.with_name("run-metadata.json")
+    report_mtime = report_path.stat().st_mtime_ns if report_path.exists() else None
+    metadata_mtime = metadata_path.stat().st_mtime_ns if metadata_path.exists() else None
+    return report_mtime, metadata_mtime
+
+
+def _quality_gated_success(report_path: Path, *, previous_mtimes: tuple[int | None, int | None]) -> str | None:
+    metadata_path = report_path.with_name("run-metadata.json")
+    if not report_path.exists() or not metadata_path.exists():
+        return None
+    current_mtimes = _artifact_mtimes(report_path)
+    if current_mtimes == previous_mtimes:
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+
+    run_status = metadata.get("run_status")
+    quality_gate = metadata.get("quality_gate")
+    if run_status == "success" and quality_gate in {"warn", "block"}:
+        return str(quality_gate)
+    return None
+
+
 def ensure_ticker_file(path: Path, *, limit: int, rebuild: bool) -> None:
     if path.exists() and not rebuild:
         return
@@ -89,12 +116,27 @@ def main() -> int:
         daily_command.append("--skip-install")
     if args.dry_run:
         daily_command.append("--dry-run")
-    run(daily_command)
+
+    report_path = DEFAULT_OUTPUT_ROOT / args.date / "daily-report.json"
+    previous_mtimes = _artifact_mtimes(report_path)
+    try:
+        run(daily_command)
+    except subprocess.CalledProcessError as exc:
+        quality_gate = _quality_gated_success(report_path, previous_mtimes=previous_mtimes)
+        if quality_gate is None:
+            raise
+        print(
+            (
+                "Advisory: scripts/run_daily.py exited "
+                f"{exc.returncode}, but {report_path} and run_status=success/quality_gate={quality_gate} "
+                "artifacts exist; continuing recommendation build."
+            ),
+            file=sys.stderr,
+        )
 
     if args.skip_recommendations or args.dry_run:
         return 0
 
-    report_path = DEFAULT_OUTPUT_ROOT / args.date / "daily-report.json"
     run(
         [
             sys.executable,

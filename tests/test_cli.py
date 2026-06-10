@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from screener.alerts import AlertSidecarError
 from screener.backtest import BacktestArtifacts
 from screener.cli.main import app
+from screener.recommendations import build_daily_top3_recommendations, update_recommendation_outcomes
 from screener.config import Settings
 from screener.models import CandidateResult, RunArtifacts, RunMetadata, ScreenRunResult, ScoreBreakdown
 
@@ -713,3 +714,175 @@ def test_collect_window_dry_run_skips_artifacts(tmp_path: Path, monkeypatch) -> 
     assert result.exit_code == 0
     assert "Artifacts skipped" in result.stdout
     assert not any(tmp_path.iterdir())
+
+
+def test_build_assistant_briefing_uses_tracked_universe_contract(tmp_path: Path) -> None:
+    report_path = tmp_path / "daily-report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-05-01",
+                "planned_ticker_count": 3,
+                "successful_ticker_count": 3,
+                "failed_ticker_count": 0,
+                "bars_nonempty_count": 3,
+                "latest_bar_date_mismatch_count": 0,
+                "insufficient_history_count": 0,
+                "planned_tickers": ["TSLA", "PLTR", "GEHC"],
+                "candidate_count": 2,
+                "candidates": [
+                    {
+                        "ticker": "GEHC",
+                        "name": "GE HealthCare Technologies Inc.",
+                        "score": 68,
+                        "risk_adjusted_score": 53,
+                        "tier": "avoid/high-risk",
+                        "reasons": ["BB 하단 근처 또는 재진입 구간"],
+                        "risks": ["주봉 추세가 아직 약함"],
+                    },
+                    {
+                        "ticker": "PLTR",
+                        "name": "Palantir Technologies Inc.",
+                        "score": 72,
+                        "risk_adjusted_score": 69,
+                        "tier": "watchlist",
+                        "reasons": ["최근 2일 이상 종가 개선"],
+                        "risks": ["시장/섹터 맥락 확인이 필요함"],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    universe_path = tmp_path / "us-stocks-universe.json"
+    universe_path.write_text(
+        json.dumps(
+            {
+                "coverage_policy": {"priority_order": ["holdings", "focus_watchlist"]},
+                "holdings": [{"ticker": "TSLA"}, {"ticker": "PLTR"}],
+                "focus_watchlist": ["GEHC"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "assistant"
+    recommendation_report_path = tmp_path / "daily-top3-source.json"
+    recommendation_report_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-04-30",
+                "generated_at": "2026-04-30T20:15:00+00:00",
+                "universe": "NASDAQ-100",
+                "planned_ticker_count": 3,
+                "successful_ticker_count": 3,
+                "candidate_count": 2,
+                "reliability_label": "ok",
+                "data_failures": [],
+                "candidates": [
+                    {
+                        "ticker": "AAPL",
+                        "name": "Apple Inc.",
+                        "score": 78,
+                        "risk_adjusted_score": 70,
+                        "subscores": {"oversold": 20, "bottom_context": 18, "reversal": 21, "volume": 12, "market_context": 10},
+                        "tier": "buy-review",
+                        "tier_reasons": ["buy-review threshold met"],
+                        "close": 100.0,
+                        "reasons": ["BB 하단 근처"],
+                        "risks": ["중기 추세 확인 필요"],
+                        "indicator_snapshot": {
+                            "close": 100.0,
+                            "low": 98.0,
+                            "bb_lower": 99.0,
+                            "rsi_14": 31.0,
+                            "sma_5": 101.0,
+                            "sma_20": 105.0,
+                            "sma_60": 110.0,
+                            "distance_to_20d_low": 2.0,
+                            "distance_to_60d_low": 6.0,
+                            "average_volume_20d": 2000000,
+                            "volume_ratio_20d": 1.2,
+                            "close_improvement_streak": 2,
+                            "rsi_3d_change": 4.0,
+                            "weekly_trend_penalty": 0,
+                            "weekly_trend_severe_damage": False,
+                            "atr_14_pct": 3.0,
+                            "daily_range_pct": 2.0,
+                            "bb_width_pct": 8.0,
+                            "days_to_next_earnings": 10,
+                            "days_since_last_earnings": 20,
+                            "rel_strength_20d_vs_qqq": 1.5,
+                            "rel_strength_60d_vs_qqq": 2.0,
+                            "market_context_score": 8,
+                            "earnings_penalty": 0,
+                            "volatility_penalty": 0,
+                            "severe_weekly_penalty": 0,
+                            "risk_adjustment_penalty": 8,
+                            "risk_adjusted_score": 70,
+                            "snapshot_schema_version": 2,
+                            "source_provider": "fixture",
+                            "source_timestamp": "2026-04-30T20:00:00+00:00",
+                            "freshness_label": "fresh",
+                            "reliability_label": "ok"
+                        },
+                        "snapshot_schema_version": 2,
+                        "generated_at": "2026-04-30T20:10:00+00:00"
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    recommendation_db_path = tmp_path / "recommendations.sqlite3"
+    recommendation_output_dir = tmp_path / "recommendations"
+    build_daily_top3_recommendations(
+        daily_report_path=recommendation_report_path,
+        db_path=recommendation_db_path,
+        output_dir=recommendation_output_dir,
+    )
+    update_recommendation_outcomes(
+        db_path=recommendation_db_path,
+        prices_by_ticker={
+            "AAPL": {"2026-05-01": {"open": 100.0, "high": 102.0, "low": 99.0, "close": 99.0}},
+            "SPY": {
+                "2026-04-30": {"open": 500.0, "high": 500.0, "low": 500.0, "close": 500.0},
+                "2026-05-01": {"open": 502.0, "high": 502.0, "low": 502.0, "close": 502.0},
+            },
+            "QQQ": {
+                "2026-04-30": {"open": 400.0, "high": 400.0, "low": 400.0, "close": 400.0},
+                "2026-05-01": {"open": 401.0, "high": 401.0, "low": 401.0, "close": 401.0},
+            },
+        },
+        as_of_date="2026-05-01",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "build-assistant-briefing",
+            "--report-path",
+            str(report_path),
+            "--output-dir",
+            str(output_dir),
+            "--user-tickers",
+            "TSLA,PLTR",
+            "--top-candidates",
+            "2",
+            "--tracked-universe-path",
+            str(universe_path),
+            "--recommendation-db-path",
+            str(recommendation_db_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads((output_dir / "latest-user-briefing-screener.json").read_text(encoding="utf-8"))
+    user_by_ticker = {item["ticker"]: item for item in payload["user_tickers"]}
+    assert user_by_ticker["PLTR"]["briefing_section"] == "holdings"
+    assert user_by_ticker["PLTR"]["briefing_label"] == "모니터"
+    assert [item["ticker"] for item in payload["top_candidates"]] == ["GEHC"]
+    assert payload["previous_top3_feedback"]["available"] is True
+    assert payload["previous_top3_feedback"]["source_run_date"] == "2026-04-30"
+    markdown = (output_dir / "latest-user-briefing-screener.md").read_text(encoding="utf-8")
+    assert "## Previous Top3 outcome feedback" in markdown
+    assert "warning 손실, SPY 미만" in markdown

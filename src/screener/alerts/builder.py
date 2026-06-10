@@ -132,6 +132,157 @@ def _apply_context_cap(
     return filtered_events, filtered_members, suppressed
 
 
+def _rank_value(value: object) -> int:
+    if isinstance(value, bool):
+        return 10_000
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return 10_000
+    return 10_000
+
+
+def _eligible_signal_items(events: list[AlertEvent], digest_members: list[dict[str, object]]) -> list[dict[str, object]]:
+    items = [
+        {
+            "ticker": event.payload.get("ticker"),
+            "rank": event.payload.get("rank"),
+            "sector": event.payload.get("sector"),
+            "correlation_group": event.payload.get("correlation_group"),
+            "tier": event.payload.get("tier"),
+        }
+        for event in events
+    ]
+    items.extend(dict(member) for member in digest_members)
+    return sorted(items, key=lambda item: _rank_value(item.get("rank")))
+
+
+def _signal_coverage(items: list[dict[str, object]], *, key: str) -> tuple[int, float]:
+    total = len(items)
+    if total == 0:
+        return 0, 0.0
+    populated = sum(1 for item in items if _member_context_value(item, key) is not None)
+    return populated, populated / total
+
+
+def _ordered_tickers(events: list[AlertEvent], digest_members: list[dict[str, object]]) -> list[str]:
+    items = _eligible_signal_items(events, digest_members)
+    return [str(item["ticker"]) for item in items if item.get("ticker") is not None]
+
+
+def _retention_ratio(baseline_tickers: list[str], shadow_tickers: list[str], *, limit: int) -> float:
+    baseline_top = baseline_tickers[:limit]
+    if not baseline_top:
+        return 1.0
+    shadow_set = set(shadow_tickers)
+    return sum(1 for ticker in baseline_top if ticker in shadow_set) / len(baseline_top)
+
+
+def _apply_watchlist_cap_to_digest_members(
+    digest_members: list[dict[str, object]],
+    *,
+    cap: int | None,
+) -> tuple[list[dict[str, object]], set[str]]:
+    if cap is None:
+        return digest_members, set()
+    kept_members: list[dict[str, object]] = []
+    suppressed: set[str] = set()
+    watchlist_seen = 0
+    for member in digest_members:
+        if member["tier"] != WATCHLIST_TIER:
+            kept_members.append(member)
+            continue
+        watchlist_seen += 1
+        if watchlist_seen <= cap:
+            kept_members.append(member)
+        else:
+            suppressed.add(str(member["ticker"]))
+    return kept_members, suppressed
+
+
+def _build_conservative_shadow_summary(
+    *,
+    baseline_events: list[AlertEvent],
+    baseline_digest_members: list[dict[str, object]],
+    pre_cap_events: list[AlertEvent],
+    pre_cap_digest_members: list[dict[str, object]],
+    regime,
+) -> dict[str, object]:
+    shadow_events = [event.model_copy(deep=True) for event in pre_cap_events]
+    shadow_digest_members = [dict(member) for member in pre_cap_digest_members]
+    eligible_items = _eligible_signal_items(shadow_events, shadow_digest_members)
+    sector_populated_count, sector_coverage_ratio = _signal_coverage(eligible_items, key="sector")
+    correlation_populated_count, correlation_coverage_ratio = _signal_coverage(eligible_items, key="correlation_group")
+
+    sector_concentration_gate = "pass"
+    correlation_gate = "pass"
+    sector_capped_tickers: set[str] = set()
+    correlation_capped_tickers: set[str] = set()
+    sector_concentration_cap = SECTOR_CONCENTRATION_CAP if regime.is_bearish else None
+    correlation_group_cap = CORRELATION_GROUP_CAP if regime.is_bearish else None
+
+    if regime.is_bearish:
+        if sector_coverage_ratio < 0.8:
+            sector_concentration_gate = "insufficient_signal"
+        else:
+            _, shadow_digest_members, sector_capped_tickers = _apply_context_cap(
+                [], shadow_digest_members, key="sector", cap=SECTOR_CONCENTRATION_CAP
+            )
+            sector_concentration_gate = "capped" if sector_capped_tickers else "pass"
+
+        if correlation_coverage_ratio < 0.8:
+            correlation_gate = "insufficient_signal"
+        else:
+            _, shadow_digest_members, correlation_capped_tickers = _apply_context_cap(
+                [], shadow_digest_members, key="correlation_group", cap=CORRELATION_GROUP_CAP
+            )
+            correlation_gate = "capped" if correlation_capped_tickers else "pass"
+
+    shadow_digest_members, capped_watchlist_tickers = _apply_watchlist_cap_to_digest_members(
+        shadow_digest_members,
+        cap=regime.watchlist_cap,
+    )
+    shadow_tickers = _ordered_tickers(shadow_events, shadow_digest_members)
+    baseline_tickers = _ordered_tickers(baseline_events, baseline_digest_members)
+    baseline_event_count = len(baseline_events) + (1 if baseline_digest_members else 0)
+    shadow_event_count = len(shadow_events) + (1 if shadow_digest_members else 0)
+
+    return {
+        "policy": "conservative",
+        "eligible_candidate_count": len(shadow_tickers),
+        "individual_event_count": len(shadow_events),
+        "digest_event_count": 1 if shadow_digest_members else 0,
+        "suppressed_candidate_count": len(eligible_items) - len(shadow_tickers),
+        "emitted_event_count": shadow_event_count,
+        "emitted_event_count_delta": shadow_event_count - baseline_event_count,
+        "emitted_event_count_delta_ratio": (
+            0.0 if baseline_event_count == 0 else (shadow_event_count - baseline_event_count) / baseline_event_count
+        ),
+        "top5_retention_ratio": _retention_ratio(baseline_tickers, shadow_tickers, limit=5),
+        "top10_retention_ratio": _retention_ratio(baseline_tickers, shadow_tickers, limit=10),
+        "regime_gate": regime.status,
+        "regime_watchlist_cap": regime.watchlist_cap,
+        "regime_gate_reason": regime.reason,
+        "sector_concentration_gate": sector_concentration_gate,
+        "sector_concentration_cap": sector_concentration_cap,
+        "suppressed_by_sector_concentration_count": len(sector_capped_tickers),
+        "correlation_gate": correlation_gate,
+        "correlation_group_cap": correlation_group_cap,
+        "suppressed_by_correlation_count": len(correlation_capped_tickers),
+        "regime_context_available": regime.status != "unknown",
+        "sector_signal_populated_count": sector_populated_count,
+        "sector_signal_coverage_ratio": sector_coverage_ratio,
+        "correlation_signal_populated_count": correlation_populated_count,
+        "correlation_signal_coverage_ratio": correlation_coverage_ratio,
+        "capped_watchlist_count": len(capped_watchlist_tickers),
+    }
+
+
 def build_daily_alert_document(
     result: ScreenRunResult,
     *,
@@ -240,6 +391,15 @@ def build_daily_alert_document(
         if tier != "suppressed" or repeated_digest_noise:
             next_tickers[candidate.ticker] = previous if repeated_digest_noise and previous is not None else ticker_state
 
+    pre_cap_events = [event.model_copy(deep=True) for event in events]
+    pre_cap_digest_members = [dict(member) for member in digest_members]
+    eligible_signal_items = _eligible_signal_items(pre_cap_events, pre_cap_digest_members)
+    sector_signal_populated_count, sector_signal_coverage_ratio = _signal_coverage(eligible_signal_items, key="sector")
+    correlation_signal_populated_count, correlation_signal_coverage_ratio = _signal_coverage(
+        eligible_signal_items,
+        key="correlation_group",
+    )
+
     sector_capped_tickers: set[str] = set()
     correlation_capped_tickers: set[str] = set()
     sector_concentration_gate = "pass"
@@ -259,21 +419,12 @@ def build_daily_alert_document(
             next_tickers.pop(ticker, None)
 
     capped_watchlist_tickers: set[str] = set()
-    if regime.watchlist_cap is not None:
-        kept_members: list[dict[str, object]] = []
-        watchlist_seen = 0
-        for member in digest_members:
-            if member["tier"] != WATCHLIST_TIER:
-                kept_members.append(member)
-                continue
-            watchlist_seen += 1
-            if watchlist_seen <= regime.watchlist_cap:
-                kept_members.append(member)
-            else:
-                capped_watchlist_tickers.add(str(member["ticker"]))
-        digest_members = kept_members
-        for ticker in capped_watchlist_tickers:
-            next_tickers.pop(ticker, None)
+    digest_members, capped_watchlist_tickers = _apply_watchlist_cap_to_digest_members(
+        digest_members,
+        cap=regime.watchlist_cap,
+    )
+    for ticker in capped_watchlist_tickers:
+        next_tickers.pop(ticker, None)
 
     digest_state: DigestAlertState | None = state.digest
     if digest_members:
@@ -302,6 +453,15 @@ def build_daily_alert_document(
         )
 
     emitted_events = [] if quality_gate == "block" else events
+    baseline_ticker_events = [event for event in emitted_events if event.event_type == "ticker_alert"]
+    baseline_digest_members = [] if quality_gate == "block" else [dict(member) for member in digest_members]
+    conservative_shadow = _build_conservative_shadow_summary(
+        baseline_events=baseline_ticker_events,
+        baseline_digest_members=baseline_digest_members,
+        pre_cap_events=pre_cap_events,
+        pre_cap_digest_members=pre_cap_digest_members,
+        regime=regime,
+    )
 
     document = AlertDocument(
         schema_version=1,
@@ -335,6 +495,12 @@ def build_daily_alert_document(
             suppressed_by_correlation_count=len(correlation_capped_tickers),
             market_data_reliability=result.metadata.reliability_label,
             market_data_provider_status=[dict(status) for status in result.metadata.market_data_provider_status],
+            regime_context_available=regime.status != "unknown",
+            sector_signal_populated_count=sector_signal_populated_count,
+            sector_signal_coverage_ratio=sector_signal_coverage_ratio,
+            correlation_signal_populated_count=correlation_signal_populated_count,
+            correlation_signal_coverage_ratio=correlation_signal_coverage_ratio,
+            conservative_shadow=conservative_shadow,
         ),
         events=emitted_events,
     )

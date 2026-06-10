@@ -29,6 +29,12 @@ class AlertSummary(BaseModel):
     suppressed_by_correlation_count: int = 0
     market_data_reliability: str | None = None
     market_data_provider_status: list[dict[str, object]] = Field(default_factory=list)
+    regime_context_available: bool = False
+    sector_signal_populated_count: int = 0
+    sector_signal_coverage_ratio: float = 0.0
+    correlation_signal_populated_count: int = 0
+    correlation_signal_coverage_ratio: float = 0.0
+    conservative_shadow: dict[str, object] | None = None
 
 
 class AlertEvent(BaseModel):

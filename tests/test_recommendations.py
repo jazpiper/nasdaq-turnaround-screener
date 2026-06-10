@@ -13,6 +13,7 @@ from screener.recommendations import (
     DailyArtifactConsistencyError,
     build_daily_top3_recommendations,
     initialize_recommendation_db,
+    load_latest_previous_top3_feedback,
     summarize_recommendation_outcomes,
     update_recommendation_outcomes,
     validate_daily_artifact_consistency,
@@ -571,7 +572,136 @@ def test_summarize_recommendation_outcomes_by_algorithm_version(tmp_path: Path) 
     assert version["avg_absolute_return_pct"] == 12.13
     assert version["median_absolute_return_pct"] == 9.4
     assert version["avg_relative_return_vs_spy_pct"] == 7.88
+    assert version["avg_max_drawdown_pct"] == -4.46
+    quality_group = summary["data_quality_groups"][0]
+    assert quality_group["run_data_quality_label"] == "degraded"
+    assert quality_group["run_reliability_label"] == "ok"
+    assert quality_group["provider_status"] == "ok"
+    assert quality_group["freshness_label"] == "fresh"
+    assert quality_group["source_provider"] == "fixture"
+    assert quality_group["sample_size"] == 4
+    assert quality_group["avg_max_drawdown_pct"] == -4.46
+    assert summary["drift_comparison_fields"]["algorithm_versions"][-1] == "avg_max_drawdown_pct"
+    assert summary["drift_comparison_fields"]["group_dimensions"] == [
+        "run_data_quality_label",
+        "run_reliability_label",
+        "provider_status",
+        "freshness_label",
+        "source_provider",
+    ]
     assert "improvement_suggestions" in summary
+
+
+def test_load_latest_previous_top3_feedback_returns_latest_prior_d_plus_1_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+
+    report_1 = tmp_path / "daily-report-1.json"
+    report_1.write_text(json.dumps(_daily_report([_candidate("AAA", 70, 78)], run_date="2026-05-19")), encoding="utf-8")
+    build_daily_top3_recommendations(daily_report_path=report_1, db_path=db_path, output_dir=output_dir)
+
+    report_2 = tmp_path / "daily-report-2.json"
+    report_2.write_text(
+        json.dumps(_daily_report([_candidate("BBB", 68, 75), _candidate("CCC", 66, 73)], run_date="2026-05-20")),
+        encoding="utf-8",
+    )
+    build_daily_top3_recommendations(daily_report_path=report_2, db_path=db_path, output_dir=output_dir)
+
+    prices = _market_prices()
+    prices["BBB"] = {"2026-05-21": _ohlcv(96.0, high=102.0, low=95.0)}
+    prices["CCC"] = {"2026-05-21": _ohlcv(103.0, high=105.0, low=100.0)}
+    update_recommendation_outcomes(db_path=db_path, prices_by_ticker=prices, as_of_date="2026-05-21")
+
+    feedback = load_latest_previous_top3_feedback(db_path=db_path, screener_date="2026-05-21")
+
+    assert feedback is not None
+    assert feedback["available"] is True
+    assert feedback["source_run_date"] == "2026-05-20"
+    assert feedback["horizon_label"] == "D+1"
+    assert feedback["filled_count"] == 2
+    assert feedback["negative_return_count"] == 1
+    assert [item["ticker"] for item in feedback["items"]] == ["BBB", "CCC"]
+    assert feedback["items"][0]["warning_flags"] == ["손실"]
+
+
+def test_load_latest_previous_top3_feedback_marks_unavailable_when_latest_prior_run_is_pending(tmp_path: Path) -> None:
+    db_path = tmp_path / "recommendations.sqlite3"
+    output_dir = tmp_path / "recommendations"
+    report_path = tmp_path / "daily-report.json"
+    report_path.write_text(json.dumps(_daily_report([_candidate("AAA", 70, 78)], run_date="2026-05-20")), encoding="utf-8")
+    build_daily_top3_recommendations(daily_report_path=report_path, db_path=db_path, output_dir=output_dir)
+
+    feedback = load_latest_previous_top3_feedback(db_path=db_path, screener_date="2026-05-21")
+
+    assert feedback == {
+        "available": False,
+        "status": "unavailable",
+        "reason": "d_plus_1_outcomes_pending",
+        "run_id": 1,
+        "source_run_date": "2026-05-20",
+        "horizon_label": "D+1",
+    }
+
+
+def test_initialize_recommendation_db_backfills_version_and_quality_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            create table recommendations (
+                recommendation_id integer primary key autoincrement,
+                run_id integer not null,
+                rank integer not null,
+                ticker text not null,
+                company_name text,
+                sector text,
+                industry text,
+                price real,
+                final_score real not null,
+                risk_adjusted_score real not null,
+                score_schema_version integer not null,
+                snapshot_schema_version integer not null,
+                subscore_oversold real not null,
+                subscore_bottom_context real not null,
+                subscore_reversal real not null,
+                subscore_volume real not null,
+                subscore_market_context real not null,
+                earnings_penalty real not null,
+                volatility_penalty real not null,
+                severe_weekly_penalty real not null,
+                risk_adjustment_penalty real not null,
+                rationale_json text not null,
+                risk_flags_json text not null,
+                tier_reasons_json text not null,
+                benchmark_context_json text not null,
+                snapshot_json text not null,
+                generated_at text not null
+            );
+            insert into recommendations (
+                run_id, rank, ticker, company_name, sector, industry, price,
+                final_score, risk_adjusted_score, score_schema_version, snapshot_schema_version,
+                subscore_oversold, subscore_bottom_context, subscore_reversal, subscore_volume,
+                subscore_market_context, earnings_penalty, volatility_penalty, severe_weekly_penalty,
+                risk_adjustment_penalty, rationale_json, risk_flags_json, tier_reasons_json,
+                benchmark_context_json, snapshot_json, generated_at
+            ) values (
+                1, 1, 'AAA', 'AAA Corp', null, null, 100.0,
+                80.0, 70.0, 1, 2,
+                20.0, 18.0, 21.0, 12.0,
+                10.0, 0.0, 0.0, 0.0,
+                8.0, '[]', '[]', '[]',
+                '{}', '{}', '2026-05-19T20:10:00+00:00'
+            );
+            """
+        )
+
+    initialize_recommendation_db(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "select algorithm_version, source_freshness_json, data_quality_json from recommendations"
+        ).fetchone()
+    assert row == ("daily-top3-v0", "{}", "{}")
 
 
 def test_cli_update_and_summarize_recommendation_outcomes(tmp_path: Path) -> None:

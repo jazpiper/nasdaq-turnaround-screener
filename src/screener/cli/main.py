@@ -17,6 +17,7 @@ from screener.pipeline import ScreenPipeline, build_context
 from screener.recommendations import (
     DailyArtifactConsistencyError,
     build_daily_top3_recommendations,
+    load_latest_previous_top3_feedback,
     summarize_recommendation_outcomes,
     update_recommendation_outcomes,
 )
@@ -24,6 +25,7 @@ from screener.reporting.assistant_briefing import (
     build_assistant_briefing_markdown,
     build_assistant_briefing_payload,
     load_daily_report,
+    load_user_universe_contract,
     parse_user_tickers,
     write_assistant_briefing,
 )
@@ -354,6 +356,16 @@ def build_assistant_briefing(
         "--artifact-basename",
         help="Optional basename for output artifacts; writes <basename>.json and <basename>.md.",
     ),
+    tracked_universe_path: Path | None = typer.Option(
+        Path("/home/ubuntu/personal-assistant/investing/us-stocks-universe.json"),
+        "--tracked-universe-path",
+        help="Optional holdings/watchlist source-of-truth JSON used to enforce briefing lane and label contracts.",
+    ),
+    recommendation_db_path: Path = typer.Option(
+        Path("output/recommendations/recommendations.sqlite3"),
+        "--recommendation-db-path",
+        help="Optional SQLite recommendation DB used to surface previous Top3 D+1 outcome feedback.",
+    ),
     dry_run: bool = typer.Option(False, help="Build the briefing without writing artifacts."),
 ) -> None:
     try:
@@ -367,12 +379,32 @@ def build_assistant_briefing(
     except OSError as exc:
         typer.echo(f"Daily report could not be read: {report_path}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
+    tracked_ticker_contract = None
+    if tracked_universe_path is not None and tracked_universe_path.exists():
+        try:
+            tracked_ticker_contract = load_user_universe_contract(tracked_universe_path)
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            typer.echo(f"Tracked universe config error: {tracked_universe_path}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+    previous_top3_feedback = None
+    if recommendation_db_path.exists():
+        try:
+            previous_top3_feedback = load_latest_previous_top3_feedback(
+                db_path=recommendation_db_path,
+                screener_date=daily_report.get("date"),
+            )
+        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+            typer.echo(f"Recommendation feedback lookup failed: {recommendation_db_path}: {exc}", err=True)
+            raise typer.Exit(code=1) from exc
+
     payload = build_assistant_briefing_payload(
         daily_report,
         user_tickers=parse_user_tickers(user_tickers),
         top_candidate_count=top_candidates,
         generated_at=datetime.now(timezone.utc),
         source_report_path=report_path,
+        tracked_ticker_contract=tracked_ticker_contract,
+        previous_top3_feedback=previous_top3_feedback,
     )
     markdown = build_assistant_briefing_markdown(payload)
 
